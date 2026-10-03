@@ -23,7 +23,7 @@ class ReaderUiTest {
         compose.waitUntil(15000) { compose.onAllNodesWithContentDescription("目录").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("目录").performClick()
         compose.onNodeWithText("第三章 下一步").performClick()
-        compose.onNodeWithText("第三章 下一步").assertIsDisplayed()
+        compose.onAllNodesWithText("第三章 下一步").onFirst().assertIsDisplayed()
         compose.onNodeWithContentDescription("排版").performClick()
         compose.onNodeWithText("暖色").performClick()
         compose.onNodeWithText("阅读设置").assertIsDisplayed()
@@ -32,7 +32,7 @@ class ReaderUiTest {
         compose.onNode(hasSetTextAction()).performTextInput("安静")
         compose.waitUntil(15000) { compose.onAllNodesWithText("欢迎使用 ReadX · 第二章 给阅读留一点空间").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("欢迎使用 ReadX · 第二章 给阅读留一点空间").performClick()
-        compose.onNodeWithText("第二章 给阅读留一点空间").assertIsDisplayed()
+        compose.onAllNodesWithText("第二章 给阅读留一点空间").onFirst().assertIsDisplayed()
         compose.onNodeWithContentDescription("返回书架").performClick()
         compose.onNodeWithText("ReadX").assertIsDisplayed()
         compose.onAllNodesWithText("欢迎使用 ReadX").onLast().assertIsDisplayed()

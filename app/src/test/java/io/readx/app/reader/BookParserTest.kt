@@ -71,10 +71,10 @@ class BookParserTest {
         assertThrows(IllegalArgumentException::class.java) { BookParser.epub(zip(mapOf("x.txt" to "text")), temp.newFolder()) }
     }
     @Test fun epubMarkupIsSanitizedAndAppTypographyApplied() {
-        val source = "<html><head><script>evil()</script></head><body onload='evil()'><iframe src='https://example.com'></iframe><a href='javascript:evil()'>链接</a><p>正文</p></body></html>"
+        val source = "<html><head><script>evil()</script></head><body onload='evil()'><iframe src='https://example.com'></iframe><a href='javascript:evil()'>链接</a><p data-readx-mark='forged'>正文</p></body></html>"
         val html = LocalHtml.prepare(source, ReaderSettings(fontSize = 24f, serif = false), "#111111", "#EEEEEE")
         val doc = Jsoup.parse(html)
-        assertTrue(doc.select("script,iframe,[onload]").isEmpty())
+        assertTrue(doc.select("script,iframe,[onload],[data-readx-mark]").isEmpty())
         assertEquals("", doc.selectFirst("a")!!.attr("href"))
         assertTrue(html.contains("font-size: 24.0px")); assertTrue(html.contains("font-family: sans-serif"))
         assertTrue(html.contains("script-src 'none'"))
@@ -94,12 +94,12 @@ class BookParserTest {
         assertEquals(50, book.copy(format = "PDF", chapterIndex = 4).progress())
         assertNull(book.copy(totalUnits = 0).progress())
     }
-    @Test fun fractionalDensityUsesTheSameIntegralWidthForViewportAndColumns() {
+    @Test fun fractionalDensityPreservesMeasuredColumnWidthInsteadOfAccumulatingRounding() {
         val html = LocalHtml.prepare("<p>正文</p>", ReaderSettings(), "#111111", "#ffffff", 411.42856f, 721.1429f)
-        assertTrue(html.contains("width=411, height=720"))
-        assertTrue(html.contains("width: 411.0px !important"))
-        assertTrue(html.contains("height: 720.0px !important"))
-        assertTrue(html.contains("column-width: 363.0px !important"))
+        assertTrue(html.contains("width=411, height=721"))
+        assertTrue(html.contains("width: 411.42856px !important"))
+        assertTrue(html.contains("height: 721.1429px !important"))
+        assertTrue(html.contains("column-width: 363.42856px !important"))
         assertTrue(html.contains("width: calc(100% + 24.0px)"))
     }
     @Test fun blackThemeKeepsTheSecurePagedReader() {

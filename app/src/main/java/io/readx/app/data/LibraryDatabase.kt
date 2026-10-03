@@ -41,6 +41,25 @@ data class Bookmark(
     val createdAt: Long = System.currentTimeMillis(),
 )
 
+/** Sidecar annotations never modify the user's original document. Offsets are UTF-16 in the canonical DOM text. */
+@Entity(tableName = "annotations", indices = [Index("bookId"), Index(value = ["bookId", "kind", "anchorKey"])],
+    foreignKeys = [ForeignKey(entity = Book::class, parentColumns = ["id"], childColumns = ["bookId"], onDelete = ForeignKey.CASCADE)])
+data class Annotation(
+    @PrimaryKey val id: String,
+    val bookId: String,
+    val kind: String,
+    val chapter: Int,
+    val fraction: Float,
+    val label: String,
+    val quote: String = "",
+    val note: String = "",
+    val locator: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "'#FFD240'") val color: String = "#FFD240",
+    @ColumnInfo(defaultValue = "''") val anchorKey: String = "",
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = 0,
+)
+
 @Dao
 interface LibraryDao {
     @Query("SELECT * FROM books ORDER BY lastReadAt DESC, importedAt DESC")
@@ -54,7 +73,37 @@ interface LibraryDao {
     @Query("SELECT COUNT(*) FROM chapters WHERE bookId=:id") suspend fun chapterCount(id: String): Int
     @Query("UPDATE books SET totalUnits=:count WHERE id=:id") suspend fun saveTotalUnits(id: String, count: Int)
     @Query("SELECT * FROM bookmarks ORDER BY createdAt DESC") fun observeBookmarks(): Flow<List<Bookmark>>
+    @Query("SELECT * FROM annotations ORDER BY createdAt DESC") fun observeAnnotations(): Flow<List<Annotation>>
+    @Query("SELECT * FROM annotations WHERE bookId=:id ORDER BY createdAt") fun annotationsForBook(id: String): Flow<List<Annotation>>
+    @Query("SELECT * FROM annotations WHERE bookId=:id ORDER BY createdAt") suspend fun annotations(id: String): List<Annotation>
+    @Insert suspend fun insertAnnotation(annotation: Annotation)
+    @Query("SELECT * FROM annotations WHERE bookId=:bookId AND kind=:kind AND anchorKey=:key ORDER BY updatedAt DESC, createdAt DESC LIMIT 1")
+    suspend fun annotationByAnchor(bookId: String, kind: String, key: String): Annotation?
+    @Update suspend fun replaceAnnotation(annotation: Annotation)
+    @Transaction suspend fun upsertAnnotation(value: Annotation): String {
+        val key=AnnotationIdentity.key(value.chapter,value.kind,value.locator,value.id)
+        val old=annotationByAnchor(value.bookId,value.kind,key)
+        val normalized=value.copy(color=MarkColor.normalize(value.color),anchorKey=key,updatedAt=System.currentTimeMillis())
+        if(old==null) insertAnnotation(normalized)
+        else replaceAnnotation(normalized.copy(id=old.id,createdAt=old.createdAt,note=if(value.kind=="NOTE") value.note else old.note))
+        return old?.id ?: value.id
+    }
+    @Transaction suspend fun cancelMarkers(bookId: String,ids: List<String>) {
+        annotations(bookId).filter {it.id in ids && it.kind in listOf("HIGHLIGHT","UNDERLINE")}.forEach {old->
+            if(old.note.isBlank()) deleteAnnotation(old.id)
+            else replaceAnnotation(old.copy(kind="NOTE",updatedAt=System.currentTimeMillis()))
+        }
+    }
+    @Query("DELETE FROM annotations WHERE bookId=:bookId AND id IN (:ids)") suspend fun deleteAnnotations(bookId: String,ids: List<String>)
+
+    @Query("UPDATE annotations SET note=:note, updatedAt=strftime('%s','now')*1000 WHERE id=:id") suspend fun updateAnnotationNote(id: String, note: String)
+    @Query("DELETE FROM annotations WHERE id=:id") suspend fun deleteAnnotation(id: String)
     @Insert suspend fun insertBookmark(bookmark: Bookmark)
+    @Transaction suspend fun insertPositionBookmark(mark: Bookmark) {
+        insertBookmark(mark)
+        insertAnnotation(Annotation(mark.id,mark.bookId,"BOOKMARK",mark.chapter,mark.fraction,mark.label,createdAt=mark.createdAt))
+    }
+    @Transaction suspend fun removePositionBookmark(id: String) { deleteAnnotation(id);deleteBookmark(id) }
     @Query("DELETE FROM bookmarks WHERE id=:id") suspend fun deleteBookmark(id: String)
     @Insert suspend fun insertBook(book: Book)
     @Insert suspend fun insertChapters(chapters: List<Chapter>)
@@ -65,7 +114,7 @@ interface LibraryDao {
     @Query("DELETE FROM books WHERE id=:id") suspend fun delete(id: String)
 }
 
-@Database(entities = [Book::class, Chapter::class, Bookmark::class], version = 2, exportSchema = true)
+@Database(entities = [Book::class, Chapter::class, Bookmark::class, Annotation::class], version = 4, exportSchema = true)
 abstract class LibraryDatabase : RoomDatabase() { abstract fun library(): LibraryDao }
 
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -83,4 +132,30 @@ fun Book.progress(): Int? {
     if (totalUnits <= 0) return null
     val read = if (format == "PDF") chapterIndex.toFloat() + 1f else chapterIndex + scrollFraction
     return (100f * read / totalUnits).toInt().coerceIn(0, 100)
+}
+
+val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS annotations (id TEXT NOT NULL, bookId TEXT NOT NULL, kind TEXT NOT NULL, chapter INTEGER NOT NULL, fraction REAL NOT NULL, label TEXT NOT NULL, quote TEXT NOT NULL, note TEXT NOT NULL, locator TEXT NOT NULL, createdAt INTEGER NOT NULL, PRIMARY KEY(id), FOREIGN KEY(bookId) REFERENCES books(id) ON UPDATE NO ACTION ON DELETE CASCADE)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_annotations_bookId ON annotations(bookId)")
+        db.execSQL("INSERT INTO annotations (id,bookId,kind,chapter,fraction,label,quote,note,locator,createdAt) SELECT id,bookId,'BOOKMARK',chapter,fraction,label,'','','',createdAt FROM bookmarks")
+    }
+}
+
+/** Additive migration: old duplicate records and all their notes remain intact. Rendering flattens their opacity. */
+val MIGRATION_3_4 = object : androidx.room.migration.Migration(3,4) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE annotations ADD COLUMN color TEXT NOT NULL DEFAULT '#FFD240'")
+        db.execSQL("ALTER TABLE annotations ADD COLUMN anchorKey TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE annotations ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE annotations SET updatedAt=createdAt")
+        db.query("SELECT id,chapter,kind,locator FROM annotations").use {cursor->
+            while(cursor.moveToNext()) {
+                val id=cursor.getString(0)
+                val key=AnnotationIdentity.key(cursor.getInt(1),cursor.getString(2),cursor.getString(3),id)
+                db.execSQL("UPDATE annotations SET anchorKey=? WHERE id=?",arrayOf(key,id))
+            }
+        }
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_annotations_bookId_kind_anchorKey ON annotations(bookId,kind,anchorKey)")
+    }
 }

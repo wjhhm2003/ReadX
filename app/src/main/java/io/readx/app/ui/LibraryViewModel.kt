@@ -8,18 +8,23 @@ import io.readx.app.ReadXApplication
 import io.readx.app.data.Book
 import io.readx.app.data.Chapter
 import io.readx.app.data.Bookmark
+import io.readx.app.data.Annotation
+import io.readx.app.data.AnnotationIdentity
+import io.readx.app.data.MarkColor
+import io.readx.app.reader.TextAnchor
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-data class ReaderLocation(val chapter: Int, val fraction: Float)
+data class ReaderLocation(val chapter: Int, val fraction: Float, val anchor: TextAnchor? = null)
 
-data class ReaderSession(val book: Book, val chapters: List<Chapter>, val chapter: Int = book.chapterIndex, val fraction: Float = book.scrollFraction, val target: String? = null, val find: String? = null, val occurrence: Int = 0, val navigationId: Long = 0, val returnStack: List<ReaderLocation> = emptyList())
+data class ReaderSession(val book: Book, val chapters: List<Chapter>, val chapter: Int = book.chapterIndex, val fraction: Float = book.scrollFraction, val target: String? = null, val find: String? = null, val occurrence: Int = 0, val navigationId: Long = 0, val anchor: TextAnchor? = null, val returnStack: List<ReaderLocation> = emptyList())
 data class SearchHit(val book: Book, val chapter: Chapter, val snippet: String, val query: String, val occurrence: Int)
 
 class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     val repository = (app as ReadXApplication).repository
     val books = repository.books.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val annotations = repository.dao.observeAnnotations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val bookmarks = repository.dao.observeBookmarks().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val preferences = ReaderPreferences(app)
     private var latestFraction = 0f
@@ -42,7 +47,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addBookmark() = viewModelScope.launch {
         val s = _reader.value ?: return@launch
-        repository.dao.insertBookmark(Bookmark(UUID.randomUUID().toString(), s.book.id, s.chapter, latestFraction, s.chapters[s.chapter].title))
+        val mark = Bookmark(UUID.randomUUID().toString(), s.book.id, s.chapter, latestFraction, s.chapters[s.chapter].title)
+        repository.dao.insertPositionBookmark(mark)
         notify("已添加书签")
     }
     fun removeBookmark(bookmark: Bookmark) = viewModelScope.launch { repository.dao.deleteBookmark(bookmark.id) }
@@ -102,23 +108,58 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     fun chapter(index: Int, target: String? = null, fraction: Float = 0f) {
         val session = _reader.value ?: return
         if (index !in session.chapters.indices) return
-        _reader.value = session.copy(chapter = index, fraction = fraction, target = target, find = null, navigationId = nextNavigationId())
+        _reader.value = session.copy(chapter = index, fraction = fraction, target = target, find = null, anchor = null, navigationId = nextNavigationId())
         savePosition(session.book.id, index, fraction)
     }
-    fun followLink(index: Int, target: String?, sourceFraction: Float) {
+    fun followLink(index: Int, target: String?, sourceFraction: Float, sourceAnchor: TextAnchor? = null) {
         val session = _reader.value ?: return
         if (index !in session.chapters.indices) return
-        val origin = ReaderLocation(session.chapter, sourceFraction.coerceIn(0f, 1f))
-        _reader.value = session.copy(chapter = index, fraction = 0f, target = target, find = null,
+        val origin = ReaderLocation(session.chapter, sourceFraction.coerceIn(0f, 1f), sourceAnchor)
+        _reader.value = session.copy(chapter = index, fraction = 0f, target = target, find = null, anchor = null,
             navigationId = nextNavigationId(), returnStack = (session.returnStack + origin).takeLast(32))
         savePosition(session.book.id, index, 0f)
     }
     fun returnFromLink() {
         val session = _reader.value ?: return
         val origin = session.returnStack.lastOrNull() ?: return
-        _reader.value = session.copy(chapter = origin.chapter, fraction = origin.fraction, target = null, find = null,
+        _reader.value = session.copy(chapter = origin.chapter, fraction = origin.fraction, target = null, find = null, anchor = origin.anchor,
             navigationId = nextNavigationId(), returnStack = session.returnStack.dropLast(1))
         savePosition(session.book.id, origin.chapter, origin.fraction)
+    }
+    fun addTextAnnotation(kind: String, anchor: TextAnchor, note: String, fraction: Float, color: String = settings.value.annotationColor) = viewModelScope.launch {
+        val s = _reader.value ?: return@launch
+        if (kind !in listOf("HIGHLIGHT", "UNDERLINE", "NOTE")) return@launch
+        repository.dao.upsertAnnotation(Annotation(UUID.randomUUID().toString(), s.book.id, kind, s.chapter,
+            fraction, s.chapters[s.chapter].title, anchor.quote, note.take(16000), anchor.json().put("href",s.chapters[s.chapter].href).toString(),color=MarkColor.normalize(color)))
+        notify("已保存批注")
+    }
+    fun removeTextMarks(anchor: TextAnchor, ids: List<String>, kind: String? = null) = viewModelScope.launch {
+        val session=_reader.value ?: return@launch
+        val rows=repository.dao.annotations(session.book.id)
+        val selected=rows.filter {it.chapter==session.chapter && it.id in ids && (kind==null || it.kind==kind)}
+        repository.dao.cancelMarkers(session.book.id,selected.map {it.id})
+        notify("已取消标记")
+    }
+    fun recolorAnnotation(annotation: Annotation,color: String)=viewModelScope.launch {
+        repository.dao.replaceAnnotation(annotation.copy(color=MarkColor.normalize(color),updatedAt=System.currentTimeMillis()))
+    }
+    fun deleteAnnotation(annotation: Annotation) = viewModelScope.launch {
+        if (annotation.kind=="BOOKMARK") repository.dao.removePositionBookmark(annotation.id)
+        else repository.dao.deleteAnnotation(annotation.id)
+    }
+    fun updateAnnotation(annotation: Annotation, note: String) = viewModelScope.launch {
+        repository.dao.updateAnnotationNote(annotation.id, note.take(16000))
+    }
+    fun openAnnotation(annotation: Annotation) {
+        openJob?.cancel()
+        openJob = viewModelScope.launch {
+            val book = repository.dao.book(annotation.bookId) ?: return@launch
+            val chapters = repository.dao.chapters(book.id)
+            if (chapters.isEmpty()) return@launch
+            latestFraction = annotation.fraction
+            _reader.value = ReaderSession(book, chapters, annotation.chapter.coerceIn(chapters.indices), annotation.fraction,
+                navigationId = nextNavigationId(), anchor = TextAnchor.parse(annotation.locator))
+        }
     }
     fun isCurrentNavigation(id: String, navigationId: Long): Boolean =
         _reader.value?.let { it.book.id == id && it.navigationId == navigationId } == true

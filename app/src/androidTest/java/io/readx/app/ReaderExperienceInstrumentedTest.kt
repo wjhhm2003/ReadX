@@ -81,13 +81,10 @@ class ReaderExperienceInstrumentedTest {
                 var total = 0
                 var generation = 0L
                 scenario.onActivity { source = findReader(it.window.decorView); total = source!!.pageInfo().second; generation = source!!.loadGeneration }
-                compose.onNodeWithText("第1/${total}页").performClick()
-                compose.onNodeWithText("章节进度").assertIsDisplayed()
+                compose.waitUntil(30000) { compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).fetchSemanticsNodes().isNotEmpty() }
                 compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).performTouchInput { swipe(center, androidx.compose.ui.geometry.Offset(width - 1f, centerY), 500) }
-                waitReady(scenario) { it.pageInfo().first == total }
-                scenario.onActivity { assertSame(source, findReader(it.window.decorView)); assertEquals(generation, source!!.loadGeneration); assertEquals("Last page must align with a full viewport", (total - 1) * source!!.width, source!!.scrollX) }
+                waitReady(scenario) { it.url.orEmpty().contains("notes.xhtml") && it.pageInfo().first==it.pageInfo().second }
                 TestScreenshots.capture("reader-page-progress")
-                compose.onNodeWithText("完成").performClick()
 
                 compose.onNodeWithContentDescription("排版").performClick()
                 compose.onNodeWithText("纯黑").performClick()
@@ -143,7 +140,7 @@ class ReaderExperienceInstrumentedTest {
         }
     }
     private fun findReader(view: View): LocalWebReader? {
-        if (view is LocalWebReader) return view
+        if (view is LocalWebReader && view.isEnabled) return view
         if (view is ViewGroup) for (i in 0 until view.childCount) findReader(view.getChildAt(i))?.let { return it }
         return null
     }

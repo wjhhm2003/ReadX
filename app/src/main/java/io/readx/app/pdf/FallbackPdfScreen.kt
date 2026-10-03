@@ -60,7 +60,7 @@ fun FallbackPdfScreen(book: Book, repository: LibraryRepository, pageChanged: (I
     }
     DisposableEffect(pdf) {
         val instance = pdf
-        onDispose { if(instance != null) CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { instance.close() } }
+        onDispose { if(instance != null) repository.closePdfResource { instance.close() } }
     }
     LaunchedEffect(pdf, page) {
         val instance = pdf ?: return@LaunchedEffect

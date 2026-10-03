@@ -27,6 +27,7 @@ import kotlin.coroutines.coroutineContext
 class LibraryRepository(private val context: Context, private val db: LibraryDatabase) {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val dao = db.library()
+    internal fun closePdfResource(close: suspend () -> Unit) = applicationScope.launch { close() }
     fun persistPosition(id: String, chapter: Int, fraction: Float) = applicationScope.launch {
         dao.savePosition(id, chapter, fraction.coerceIn(0f, 1f), System.currentTimeMillis())
     }

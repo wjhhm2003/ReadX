@@ -3,6 +3,9 @@ package io.readx.app.reader
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.animation.DecelerateInterpolator
@@ -15,22 +18,108 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
 import io.readx.app.data.LibraryRepository
+import io.readx.app.data.Annotation
+import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
 import io.readx.app.ui.ReaderSession
 import io.readx.app.ui.ReaderSettings
 import org.jsoup.Jsoup
 import java.io.ByteArrayInputStream
 
-/** Local-only WebView. No JavaScript, no network, no file/content access and no native JS bridge. */
+/** Local-only WebView. Book scripts blocked by CSP; only bundled native-evaluated code, no JS bridge or network. */
 class ReaderController {
     internal var view: LocalWebReader? = null
     fun turn(direction: Int) { view?.turn(direction) }
     fun jumpToPage(page: Int) { view?.jumpToPage(page) }
+    fun selection(callback: (TextAnchor?) -> Unit) { view?.readAnchor("window.ReadX.selection()", callback) ?: callback(null) }
+    fun restoreAnchor(anchor: TextAnchor) { view?.navigateAnchor(anchor) }
+
 }
 
 class LocalWebReader(context: Context) : WebView(context) {
     var reportPosition: ((Float, Int, Int) -> Unit)? = null
     var boundary: ((Int) -> Unit)? = null
     var resized: ((Float) -> Unit)? = null
+    var tapZone: ((Int) -> Unit)? = null
+    var selectionPopup: ((ReaderSelection?) -> Unit)? = null
+    private var lastSelectionRead=0L
+    var annotationSelected: ((String, TextAnchor) -> Unit)? = null
+    var sourceAnchor: TextAnchor? = null
+        private set
+    private var selectionActive = false
+    private var windowActionMode: ActionMode? = null
+    private var annotationGeneration = -1L
+    private var displayedAnnotations: List<Annotation>? = null
+    private val trustedScript by lazy { context.assets.open("reader.js").bufferedReader().use { it.readText().removePrefix("\uFEFF") } }
+    fun trusted(expression: String, callback: (String) -> Unit = {}) {
+        if(released) return
+        val generation = loadGeneration
+        val uri = Uri.parse(url ?: return)
+        if (uri.scheme != "https" || uri.host != "appassets.androidplatform.net") return
+        evaluateJavascript(expression) { if (isCurrentLoad(generation)) callback(it) }
+    }
+    fun showSelectionPopup(expression: String="window.ReadX.selectionInfo()") {
+        trusted("JSON.stringify($expression)") {result->
+            val raw=runCatching {JSONTokener(result).nextValue() as? String}.getOrNull()
+            selectionPopup?.invoke(raw?.let(ReaderSelection::parse))
+        }
+    }
+    fun clearReaderSelection() {
+        windowActionMode?.finish();windowActionMode=null;selectionActive=false
+        trusted("window.ReadX.clearSelection()")
+        selectionPopup?.invoke(null)
+    }
+    fun initializeTrusted(callback: () -> Unit) = trusted(trustedScript) { callback() }
+    fun readAnchor(expression: String, callback: (TextAnchor?) -> Unit) {
+        trusted("JSON.stringify($expression)") { result ->
+            val value = runCatching { JSONTokener(result).nextValue() as? String }.getOrNull()
+            callback(value?.let(TextAnchor::parse))
+        }
+    }
+    fun navigateAnchor(anchor: TextAnchor, finished: (Boolean) -> Unit = {}) {
+        trusted("JSON.stringify(window.ReadX.navigate(${anchor.json()},$paged))") { result ->
+            val value = runCatching { JSONObject(JSONTokener(result).nextValue() as String) }.getOrNull()
+            val found = value?.optBoolean("found") == true
+            if (found && paged) jumpToPage(value!!.optInt("page", 1))
+            if (found) report()
+            finished(found)
+        }
+    }
+    fun applyAnnotations(annotations: List<Annotation>, finished: () -> Unit = {}) {
+        if (annotationGeneration == loadGeneration && displayedAnnotations == annotations) { finished(); return }
+        annotationGeneration = loadGeneration; displayedAnnotations = annotations.toList()
+        val items = JSONArray()
+        annotations.filter { it.kind != "BOOKMARK" }.forEach { annotation ->
+            TextAnchor.parse(annotation.locator)?.let { anchor -> items.put(JSONObject().put("id", annotation.id).put("kind", annotation.kind).put("anchor", anchor.json()).put("color",annotation.color).put("updatedAt",maxOf(annotation.updatedAt,annotation.createdAt))) }
+        }
+        trusted("window.ReadX.marks($items)") { finished() }
+    }
+    fun bindWindowActionMode(mode: ActionMode) {
+        windowActionMode=mode;selectionActive=true
+        mode.menu.clear()
+        post {if(windowActionMode===mode) {mode.menu.clear();showSelectionPopup()}}
+    }
+    fun unbindWindowActionMode(mode: ActionMode) {
+        if(windowActionMode===mode) {windowActionMode=null;selectionActive=false;selectionPopup?.invoke(null);report()}
+    }
+    override fun startActionMode(callback: ActionMode.Callback): ActionMode?=startActionMode(callback,ActionMode.TYPE_FLOATING)
+    override fun startActionMode(callback: ActionMode.Callback,type: Int): ActionMode? {
+        val wrapper=object: ActionMode.Callback2() {
+            override fun onCreateActionMode(mode: ActionMode,menu: Menu): Boolean {
+                val created=callback.onCreateActionMode(mode,menu);menu.clear()
+                if(created) {selectionActive=true;windowActionMode=mode;post {showSelectionPopup()}}
+                return created
+            }
+            override fun onPrepareActionMode(mode: ActionMode,menu: Menu): Boolean {callback.onPrepareActionMode(mode,menu);menu.clear();return true}
+            override fun onActionItemClicked(mode: ActionMode,item: MenuItem)=false
+            override fun onDestroyActionMode(mode: ActionMode) {unbindWindowActionMode(mode);callback.onDestroyActionMode(mode)}
+            override fun onGetContentRect(mode: ActionMode,view: android.view.View,out: android.graphics.Rect) {
+                if(callback is ActionMode.Callback2) callback.onGetContentRect(mode,view,out) else super.onGetContentRect(mode,view,out)
+            }
+        }
+        return super.startActionMode(wrapper,type)
+    }
     var paged = true
     var restoring = true
     var loadGeneration = 0L
@@ -46,6 +135,7 @@ class LocalWebReader(context: Context) : WebView(context) {
     private var dragStartX = 0
     private var consumedSwipe = false
     private var pageAnimator: ValueAnimator? = null
+    val isTurning get() = pageAnimator != null
     private var destinationX = 0
     fun isCurrentLoad(generation: Long) = !released && loadGeneration == generation
     fun horizontalRange(): Int = computeHorizontalScrollRange()
@@ -99,7 +189,10 @@ class LocalWebReader(context: Context) : WebView(context) {
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
                     pageAnimator = null
-                    if (!released) { scrollTo(x, 0); report(); invalidate() }
+                    if (!released) {
+                        scrollTo(x,0)
+                        postVisualStateCallback(loadGeneration,object: WebView.VisualStateCallback() {override fun onComplete(requestId: Long) {if(!released) {report();invalidate()}}})
+                    }
                 }
             })
             start()
@@ -137,10 +230,41 @@ class LocalWebReader(context: Context) : WebView(context) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (oldFraction != null && !restoring && !released && (w != oldw || h != oldh)) resized?.invoke(oldFraction)
     }
+    private fun handleShortTap(event: MotionEvent): Boolean {
+        if(event.actionMasked!=MotionEvent.ACTION_UP) return false
+        if (!selectionActive && event.eventTime - downTime < ViewConfiguration.getLongPressTimeout() &&
+                kotlin.math.abs(event.x-downX) < ViewConfiguration.get(context).scaledTouchSlop &&
+                kotlin.math.abs(event.y-downY) < ViewConfiguration.get(context).scaledTouchSlop) {
+                val x=event.x; val y=event.y
+                val cancel=MotionEvent.obtain(event); cancel.action=MotionEvent.ACTION_CANCEL; super.onTouchEvent(cancel); cancel.recycle()
+                trusted("JSON.stringify(window.ReadX.markAt(${x / resources.displayMetrics.density},${y / resources.displayMetrics.density}))") {result->
+                    val raw=runCatching {JSONTokener(result).nextValue() as? String}.getOrNull()
+                    val mark=raw?.let(ReaderSelection::parse)
+                    if(mark!=null) selectionPopup?.invoke(mark)
+                    else trusted("window.ReadX.interactiveAt(${x / resources.displayMetrics.density},${y / resources.displayMetrics.density})") {interactive->
+                        if(interactive=="true") trusted("(function(){var e=document.elementFromPoint(${x / resources.displayMetrics.density},${y / resources.displayMetrics.density});var a=e && e.closest('a');if(a)a.click();})()")
+                        else {selectionPopup?.invoke(null);tapZone?.invoke(if(x<width/3f) -1 else if(x>width*2/3f) 1 else 0)}
+                    }
+                }
+                performClick()
+                return true
+            }
+        return false
+    }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (restoring) return true
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) { finishTransition(); linkOriginFraction = fraction() }
-        if (!paged || event.pointerCount > 1) return super.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) { finishTransition(); linkOriginFraction = fraction(); readAnchor("window.ReadX.viewportAnchor()") { sourceAnchor = it } }
+        if(event.actionMasked==MotionEvent.ACTION_DOWN) {downX=event.x;downY=event.y;downTime=event.eventTime}
+        if(selectionActive) {
+            val handled=super.onTouchEvent(event)
+            if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_MOVE && event.eventTime-lastSelectionRead>100) {
+                lastSelectionRead=event.eventTime
+                post {if(selectionActive) {windowActionMode?.menu?.clear();showSelectionPopup()}}
+            }
+            return handled
+        }
+        if(event.pointerCount>1) return super.onTouchEvent(event)
+        if(!paged) {if(handleShortTap(event)) return true;return super.onTouchEvent(event)}
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x; downY = event.y; downTime = event.eventTime
@@ -162,7 +286,7 @@ class LocalWebReader(context: Context) : WebView(context) {
                     return true
                 }
             }
-            MotionEvent.ACTION_UP -> if (consumedSwipe) {
+            MotionEvent.ACTION_UP -> { if (consumedSwipe) {
                 consumedSwipe = false
                 parent?.requestDisallowInterceptTouchEvent(false)
                 val dx = event.x - downX
@@ -173,6 +297,8 @@ class LocalWebReader(context: Context) : WebView(context) {
                 else { scrollTo(dragStartX, 0); crossBoundary(direction) }
                 return true
             }
+            if(handleShortTap(event)) return true
+            }
             MotionEvent.ACTION_CANCEL -> if (consumedSwipe) {
                 consumedSwipe = false; parent?.requestDisallowInterceptTouchEvent(false)
                 animateTo(dragStartX); return true
@@ -180,6 +306,7 @@ class LocalWebReader(context: Context) : WebView(context) {
         }
         return super.onTouchEvent(event)
     }
+    override fun performClick(): Boolean { super.performClick(); return true }
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
         if (keyCode == android.view.KeyEvent.KEYCODE_ENTER || keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER) linkOriginFraction = fraction()
         return super.onKeyDown(keyCode, event)
@@ -187,27 +314,29 @@ class LocalWebReader(context: Context) : WebView(context) {
     fun release() {
         if (released) return
         finishTransition()
+        windowActionMode?.finish();windowActionMode=null;selectionActive=false
         released = true; loadGeneration++
-        reportPosition = null; boundary = null; resized = null
+        reportPosition = null; boundary = null; resized = null; tapZone=null; annotationSelected=null;selectionPopup=null
         stopLoading(); webViewClient = WebViewClient(); destroy()
     }
 }
 
 object LocalHtml {
     fun prepare(source: String, settings: ReaderSettings, foreground: String, background: String, viewportWidth: Float = 360f, viewportHeight: Float = 640f): String {
-        // Chromium's viewport meta width is integral. Use that same width in columns and scale
-        // height proportionally; fractional density conversions otherwise accumulate page drift.
-        val pageWidth = kotlin.math.round(viewportWidth).coerceAtLeast(1f)
-        val pageHeight = kotlin.math.floor(viewportHeight * pageWidth / viewportWidth.coerceAtLeast(1f)).coerceAtLeast(1f)
+        // Preserve measured fractional CSS pixels: initial-scale=1 follows the native density,
+        // while viewport meta dimensions are integral. Rounding column widths accumulates drift in long chapters.
+        val pageWidth = viewportWidth.coerceAtLeast(1f)
+        val pageHeight = viewportHeight.coerceAtLeast(1f)
         val document = Jsoup.parse(source)
-        document.select("script,iframe,object,embed,form,input,button,base,meta[http-equiv],link[rel=preload],svg foreignObject").remove()
+        document.select("script,noscript,iframe,object,embed,form,input,button,base,meta[http-equiv],link[rel=preload],svg foreignObject").remove()
         document.allElements.forEach { element ->
             element.attributes().asList().forEach { attr ->
                 val name = attr.key.lowercase()
                 val value = attr.value.trim().lowercase()
-                if (name.startsWith("on") || name == "srcdoc" || ((name == "href" || name == "src" || name == "xlink:href") && (value.startsWith("javascript:") || value.startsWith("file:") || value.startsWith("content:")))) element.removeAttr(attr.key)
+                if (name.startsWith("on") || name.startsWith("data-readx-") || name == "srcdoc" || ((name == "href" || name == "src" || name == "xlink:href") && (value.startsWith("javascript:") || value.startsWith("file:") || value.startsWith("content:")))) element.removeAttr(attr.key)
             }
         }
+        document.select("body style").forEach { it.remove(); document.head().appendChild(it) }
         document.head().prependElement("meta").attr("http-equiv", "Content-Security-Policy").attr("content", "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'none'; connect-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'")
         document.select("meta[name=viewport]").remove()
         document.head().appendElement("meta").attr("name", "viewport").attr("content", "width=${pageWidth.toInt()}, height=${pageHeight.toInt()}, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no")
@@ -234,7 +363,8 @@ object LocalHtml {
 fun WebReader(
     session: ReaderSession, settings: ReaderSettings, repository: LibraryRepository,
     foreground: String, background: String, modifier: Modifier,
-    navigate: (Int, String?) -> Unit, followLink: (Int, String?, Float) -> Unit,
+    navigate: (Int, String?) -> Unit, followLink: (Int, String?, Float, TextAnchor?) -> Unit,
+    onViewport: (Int, Int) -> Unit, annotations: List<Annotation>, onTapZone: (Int) -> Unit, onSelection: (ReaderSelection?) -> Unit, onAnnotation: (String, TextAnchor) -> Unit,
     onPosition: (Float, Boolean, Int, Int) -> Unit,
     notify: (String) -> Unit, controller: ReaderController,
 ) {
@@ -245,10 +375,15 @@ fun WebReader(
         val currentNavigate by rememberUpdatedState(navigate)
         val currentLink by rememberUpdatedState(followLink)
         val currentNotify by rememberUpdatedState(notify)
+        val currentAnnotations by rememberUpdatedState(annotations)
+        val currentTap by rememberUpdatedState(onTapZone)
+        val currentAnnotation by rememberUpdatedState(onAnnotation)
+        val currentSelection by rememberUpdatedState(onSelection)
+        val currentViewport by rememberUpdatedState(onViewport)
         AndroidView(modifier = modifier,
             factory = { context ->
                 LocalWebReader(context).apply {
-                    this.settings.javaScriptEnabled = false
+                    this.settings.javaScriptEnabled = true
                     this.settings.allowFileAccess = false
                     this.settings.allowContentAccess = false
                     this.settings.blockNetworkLoads = true
@@ -263,8 +398,12 @@ fun WebReader(
                 }
             },
             update = { view ->
+                view.tapZone = { currentTap(it) }
+                view.selectionPopup = {currentSelection(it)}
+                view.annotationSelected = { kind, anchor -> currentAnnotation(kind, anchor) }
+                if (!view.restoring) view.applyAnnotations(annotations)
                 val fontScale = view.resources.configuration.fontScale
-                val signature = listOf(settings, foreground, background, chapter.href, session.navigationId, fontScale)
+                val signature = listOf(settings.layout, settings.fontSize, settings.lineHeight, settings.margin, settings.serif, foreground, background, chapter.href, session.navigationId, fontScale)
                 if (view.tag != signature) {
                     view.finishTransition()
                     var restore = if (view.tag == null) session.fraction else view.fraction()
@@ -286,6 +425,7 @@ fun WebReader(
                     val href = chapter.href.split('/').joinToString("/") { Uri.encode(it) }
                     val baseUrl = "https://appassets.androidplatform.net/content/" + href
                     view.resized = { fraction ->
+                        currentViewport(view.width, view.height)
                         view.finishTransition(); restore = fraction; target = null; handled = false
                         view.restoring = true; view.loadGeneration++; loadedUrl = baseUrl
                         view.loadUrl(baseUrl)
@@ -314,7 +454,7 @@ fun WebReader(
                             view.finishTransition()
                             val origin = view.fraction()
                             view.restoring = true
-                            currentLink(index, uri.fragment, origin)
+                            currentLink(index, uri.fragment, origin, view.sourceAnchor)
                             return true
                         }
                         override fun doUpdateVisitedHistory(webView: WebView, url: String, isReload: Boolean) {
@@ -326,11 +466,11 @@ fun WebReader(
                                 uri.path.orEmpty().removePrefix("/content/") == chapter.href && uri.fragment != null) {
                                 val origin = view.linkOriginFraction
                                 view.restoring = true
-                                currentLink(session.chapter, uri.fragment, origin)
+                                currentLink(session.chapter, uri.fragment, origin, view.sourceAnchor)
                             }
                         }
                         override fun onPageFinished(webView: WebView, url: String) {
-                            if (view.tag != signature || handled) return
+                            if (view.tag != signature || handled || !view.isCurrentLoad(view.loadGeneration)) return
                             handled = true
                             val generation = view.loadGeneration
                             fun active() = view.tag == signature && view.isCurrentLoad(generation)
@@ -341,7 +481,12 @@ fun WebReader(
                                 else if (target != null) view.snap()
                                 else view.restore(restore)
                                 view.restoring = false
-                                view.report()
+                                view.initializeTrusted {
+                                    view.applyAnnotations(currentAnnotations) {
+                                        if (session.anchor != null) view.navigateAnchor(session.anchor) { found -> if (!found) currentNotify("批注文字未能唯一定位，已回到原章节位置") }
+                                        view.report()
+                                    }
+                                }
                                 view.alpha = if (ValueAnimator.areAnimatorsEnabled()) 0f else 1f
                                 view.animate().alpha(1f).setDuration(140).start()
                                 if (session.find != null) {
@@ -379,7 +524,8 @@ fun WebReader(
                     }
                     // HTML pagination is derived only from the measured reading viewport.
                     view.doOnLayout {
-                        if (view.tag == signature) {
+                        if (view.tag == signature && view.isCurrentLoad(view.loadGeneration)) {
+                            currentViewport(view.width,view.height)
                             view.stopLoading(); view.loadGeneration++
                             view.viewportWidthCss = view.width / view.resources.displayMetrics.density
                             view.viewportHeightCss = view.height / view.resources.displayMetrics.density

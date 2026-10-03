@@ -51,9 +51,9 @@ class PaginationInstrumentedTest {
                 var total = 0
                 compose.waitUntil(20000) { scenario.onActivity { total = findReader(it.window.decorView)?.takeUnless { it.restoring }?.pageInfo()?.second ?: 0 }; total > 3 }
                 scenario.onActivity { assertEquals(1, findReader(it.window.decorView)!!.pageInfo().first); assertTrue("Pagination must use full-height pages, not one line per page", total < 100) }
-                compose.onNodeWithText("下一页").performClick()
-                compose.waitUntil(5000) { compose.onAllNodesWithText("第2/${total}页").fetchSemanticsNodes().isNotEmpty() }
-                compose.onNodeWithText("第2/${total}页").assertIsDisplayed()
+                tap(scenario,.85f)
+                compose.waitUntil(5000) { var reached=false; scenario.onActivity { reached=findReader(it.window.decorView)?.pageInfo()?.first==2 }; reached }
+
                 scenario.onActivity { val reader = findReader(it.window.decorView)!!; assertTrue(reader.scrollX > 0); assertEquals(0, reader.scrollY) }
                 scenario.onActivity { activity ->
                     val reader = findReader(activity.window.decorView)!!
@@ -64,8 +64,8 @@ class PaginationInstrumentedTest {
                         reader.dispatchTouchEvent(event); event.recycle()
                     }
                 }
-                compose.waitUntil(5000) { compose.onAllNodesWithText("第3/${total}页").fetchSemanticsNodes().isNotEmpty() }
-                compose.onNodeWithText("第3/${total}页").assertIsDisplayed()
+                compose.waitUntil(5000) { var reached=false; scenario.onActivity { reached=findReader(it.window.decorView)?.pageInfo()?.first==3 }; reached }
+
                 scenario.onActivity { val r = findReader(it.window.decorView)!!; assertEquals((r.pageInfo().first - 1) * r.width, r.scrollX) }
                 TestScreenshots.capture("$format-paged")
 
@@ -84,17 +84,17 @@ class PaginationInstrumentedTest {
                 compose.onNodeWithText("完成").performClick()
                 compose.waitUntil(15000) { var ready = false; scenario.onActivity { ready = findReader(it.window.decorView)?.let { it.paged && !it.restoring && it.pageInfo().second > 3 } ?: false }; ready }
                 scenario.onActivity { findReader(it.window.decorView)!!.restore(1f) }
-                compose.onNodeWithText("下一页").performClick()
+                tap(scenario,.85f)
                 compose.waitUntil(5000) { compose.onAllNodesWithText("第二章 章末测试").fetchSemanticsNodes().isNotEmpty() }
-                compose.onNodeWithText("第二章 章末测试").assertIsDisplayed()
+                compose.onAllNodesWithText("第二章 章末测试").onFirst().assertIsDisplayed()
                 compose.waitUntil(15000) { var ready = false; scenario.onActivity { ready = findReader(it.window.decorView)?.let { !it.restoring } ?: false }; ready }
-                compose.onNodeWithText("上一页").performClick()
+                tap(scenario,.15f)
                 compose.waitUntil(5000) { compose.onAllNodesWithText("第一章 分页测试").fetchSemanticsNodes().isNotEmpty() }
-                compose.onNodeWithText("第一章 分页测试").assertIsDisplayed()
+                compose.onAllNodesWithText("第一章 分页测试").onFirst().assertIsDisplayed()
                 compose.waitUntil(15000) { var end = false; scenario.onActivity { end = findReader(it.window.decorView)?.let { !it.restoring && it.pageInfo().first == it.pageInfo().second && it.pageInfo().second > 3 } ?: false }; end }
-                compose.onNodeWithContentDescription("添加书签").performClick()
+                compose.onNodeWithContentDescription("添加位置书签").performClick()
                 compose.onNodeWithContentDescription("返回书架").performClick()
-                compose.onNodeWithText("书签", useUnmergedTree = true).performClick()
+                compose.onNode(hasText("批注") and hasClickAction()).performClick()
                 compose.waitUntil(5000) { compose.onAllNodesWithText("第一章 分页测试").fetchSemanticsNodes().isNotEmpty() }
                 compose.waitForIdle()
                 TestScreenshots.capture("$format-bookmark-tab")
@@ -104,8 +104,16 @@ class PaginationInstrumentedTest {
             prefs.edit().apply { if (oldLayout == null) remove("layout") else putString("layout", oldLayout) }.commit()
         }
     }
+    private fun tap(scenario: ActivityScenario<MainActivity>, part: Float) {
+        scenario.onActivity { activity ->
+            val reader=findReader(activity.window.decorView)!!;val now=android.os.SystemClock.uptimeMillis()
+            listOf(android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_UP).forEachIndexed {i,action ->
+                val event=android.view.MotionEvent.obtain(now,now+i*60L,action,reader.width*part,reader.height*.5f,0);reader.dispatchTouchEvent(event);event.recycle()
+            }
+        }
+    }
     private fun findReader(view: View): LocalWebReader? {
-        if (view is LocalWebReader) return view
+        if (view is LocalWebReader && view.isEnabled) return view
         if (view is ViewGroup) for (i in 0 until view.childCount) findReader(view.getChildAt(i))?.let { return it }
         return null
     }

@@ -64,14 +64,14 @@ class PdfInstrumentedTest {
         val intent = Intent(app, PdfActivity::class.java).putExtra("bookId", book.id).putExtra("forceBasicForTest", true)
         ActivityScenario.launch<PdfActivity>(intent).use {
             waitForPage(1)
-            compose.onNodeWithText("下一页").performClick()
+            compose.waitUntil(15000) {compose.onAllNodesWithTag("pdf-page-0").fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("pdf-page-0").performTouchInput { swipeLeft() }
             waitForPage(2)
-            compose.onNodeWithText("重置缩放").performClick()
-            compose.onNodeWithText("基础模式：支持翻页和缩放；选字、搜索及密码文档需较新的系统。").assertIsDisplayed()
+            compose.onNodeWithText("左右滑页 · 双指缩放 · 长按拖动选字或区域批注（扫描件无 OCR）").assertIsDisplayed()
         }
     }
     private fun waitForPage(number: Int) {
-        compose.waitUntil(30000) { compose.onAllNodesWithText("第 $number / 3 页").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(30000) { compose.onAllNodesWithText("第${number}/3页").fetchSemanticsNodes().isNotEmpty() }
     }
     private fun withPdf(landscape: Boolean = false, block: (ReadXApplication, Book) -> Unit) {
         val app = ApplicationProvider.getApplicationContext<ReadXApplication>()
