@@ -66,7 +66,7 @@ fun ReadXApp(vm: LibraryViewModel) {
     }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
     ReadXTheme(settings.theme) {
-        Scaffold(snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = if (session == null) 88.dp else 56.dp)) }) { outer ->
+        Scaffold(contentWindowInsets = WindowInsets.safeDrawing, snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = if (session == null) 88.dp else 56.dp)) }) { outer ->
             Box(Modifier.fillMaxSize().padding(outer).consumeWindowInsets(outer)) {
                 if (session == null) {
                     LibraryScreen(
@@ -81,7 +81,7 @@ fun ReadXApp(vm: LibraryViewModel) {
                 } else ReaderScreen(session!!, settings, vm, { showSettings = true }, { searchBook = session!!.book.id; searchOpen = true })
             }
         }
-        if (showSettings) SettingsSheet(settings, vm.preferences::update) { showSettings = false }
+        if (showSettings) SettingsSheet(settings, vm.preferences::update, vm.preferences::reset) { showSettings = false }
         if (searchOpen) SearchDialog(vm, searchBook) { searchOpen = false; vm.search("") }
     }
 }
@@ -102,8 +102,9 @@ private fun LibraryScreen(
     val recent = books.filter { it.lastReadAt > 0 }.sortedByDescending { it.lastReadAt }
     val showHome = selectedTab == 0
     Scaffold(
+        contentWindowInsets = WindowInsets(0),
         topBar = {
-            TopAppBar(title = { Text("ReadX", fontSize = 34.sp, fontWeight = FontWeight.Bold) }, actions = {
+            TopAppBar(windowInsets = WindowInsets(0), title = { Text("ReadX", fontSize = 34.sp, fontWeight = FontWeight.Bold) }, actions = {
                 IconButton(onClick = search) { Icon(Icons.Rounded.Search, "全文搜索") }
                 IconButton(onClick = import, enabled = !busy) {
                     if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
@@ -119,7 +120,7 @@ private fun LibraryScreen(
             })
         },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
+            NavigationBar(windowInsets = WindowInsets(0), containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
                 listOf(
                     Triple(Icons.Rounded.Home, "首页", 0),
                     Triple(Icons.Rounded.CollectionsBookmark, "书库", 1),
@@ -248,16 +249,24 @@ private fun Cover(book: Book, repository: LibraryRepository, modifier: Modifier)
 @Composable
 private fun ReaderScreen(session: ReaderSession, settings: ReaderSettings, vm: LibraryViewModel, showSettings: () -> Unit, search: () -> Unit) {
     var toc by rememberSaveable { mutableStateOf(false) }
-    var page by remember(session.book.id, session.chapter, settings.layout) { mutableIntStateOf(1) }
-    var pages by remember(session.book.id, session.chapter, settings.layout) { mutableIntStateOf(1) }
-    var fraction by remember(session.book.id, session.chapter) { mutableFloatStateOf(session.fraction) }
+    var page by remember(session.book.id, session.navigationId, session.chapter, settings) { mutableIntStateOf(1) }
+    var pages by remember(session.book.id, session.navigationId, session.chapter, settings) { mutableIntStateOf(0) }
+    var fraction by remember(session.book.id, session.navigationId, session.chapter) { mutableFloatStateOf(session.fraction) }
+    var showProgress by remember(session.book.id, session.navigationId, settings) { mutableStateOf(false) }
     val controller = remember { ReaderController() }
     val chapter = session.chapters[session.chapter]
-    BackHandler { vm.close() }
+    BackHandler { if (session.returnStack.isNotEmpty()) vm.returnFromLink() else vm.close() }
     Scaffold(
-        topBar = { TopAppBar(title = {
-            Column { Text(session.book.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(chapter.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        contentWindowInsets = WindowInsets(0),
+        topBar = { TopAppBar(windowInsets = WindowInsets(0), title = {
+            Column {
+                Text(session.book.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (session.returnStack.isNotEmpty()) {
+                    TextButton(onClick = vm::returnFromLink, modifier = Modifier.height(24.dp), contentPadding = PaddingValues(0.dp)) {
+                        Text("回到原处", style = MaterialTheme.typography.labelSmall)
+                    }
+                } else Text(chapter.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }, navigationIcon = { IconButton(onClick = vm::close) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回书架") } }, actions = {
             IconButton(onClick = { toc = true }) { Icon(Icons.AutoMirrored.Rounded.List, "目录") }
             IconButton(onClick = { vm.addBookmark() }) { Icon(Icons.Rounded.BookmarkAdd, "添加书签") }
@@ -265,18 +274,35 @@ private fun ReaderScreen(session: ReaderSession, settings: ReaderSettings, vm: L
             IconButton(onClick = showSettings) { Icon(Icons.Rounded.Tune, "排版") }
         }) },
         bottomBar = {
-            Surface(tonalElevation = 1.dp) { Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onClick = { if (settings.layout == ReadingLayout.PAGED) controller.turn(-1) else vm.chapter(session.chapter - 1) }, enabled = session.chapter > 0 || page > 1) { Text(if (settings.layout == ReadingLayout.PAGED) "上一页" else "上一章") }
-                Text(if (settings.layout == ReadingLayout.PAGED) "第 $page / $pages 页" else "滚动 ${(fraction * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(onClick = { if (settings.layout == ReadingLayout.PAGED) controller.turn(1) else vm.chapter(session.chapter + 1) }, enabled = session.chapter < session.chapters.lastIndex || page < pages) { Text(if (settings.layout == ReadingLayout.PAGED) "下一页" else "下一章") }
-            } }
+            Surface(color = MaterialTheme.colorScheme.background) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = { if (settings.layout == ReadingLayout.PAGED) controller.turn(-1) else vm.chapter(session.chapter - 1) }, enabled = pages > 0 && (session.chapter > 0 || page > 1)) { Text(if (settings.layout == ReadingLayout.PAGED) "上一页" else "上一章") }
+                    TextButton(onClick = { showProgress = true }, enabled = settings.layout == ReadingLayout.PAGED && pages > 0) {
+                        Text(if (pages == 0) "正在排版…" else if (settings.layout == ReadingLayout.PAGED) "第$page/${pages}页" else "滚动 ${(fraction * 100).toInt()}%", style = MaterialTheme.typography.labelMedium)
+                    }
+                    TextButton(onClick = { if (settings.layout == ReadingLayout.PAGED) controller.turn(1) else vm.chapter(session.chapter + 1) }, enabled = pages > 0 && (session.chapter < session.chapters.lastIndex || page < pages)) { Text(if (settings.layout == ReadingLayout.PAGED) "下一页" else "下一章") }
+                }
+            }
         },
     ) { padding ->
         val foreground = "#%06X".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xFFFFFF)
         val background = "#%06X".format(MaterialTheme.colorScheme.background.toArgb() and 0xFFFFFF)
-        WebReader(session, settings, vm.repository, foreground, background, Modifier.fillMaxSize().padding(padding), { index, target -> vm.chapter(index, target) },
-            { position, final, current, total -> fraction = position; page = current; pages = total; if(final) vm.savePosition(session.book.id, session.chapter, position) else vm.position(session.book.id, session.chapter, position) }, vm::notify, controller)
+        WebReader(session, settings, vm.repository, foreground, background,
+            Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
+            { index, target -> vm.chapter(index, target) }, vm::followLink,
+            { position, final, current, total ->
+                // Ignore a released WebView from a previous link/chapter navigation, including same-chapter links.
+                if (vm.isCurrentNavigation(session.book.id, session.navigationId)) {
+                    fraction = position; page = current; pages = total
+                    if (final) vm.savePosition(session.book.id, session.chapter, position)
+                    else vm.position(session.book.id, session.chapter, position)
+                } else if (final && vm.reader.value == null) {
+                    // Leaving the reader must still flush the settled final page.
+                    vm.savePosition(session.book.id, session.chapter, position)
+                }
+            }, vm::notify, controller)
     }
+    if (showProgress && pages > 0) PageProgressSheet(page, pages, chapter.title, controller::jumpToPage) { showProgress = false }
     if (toc) ModalBottomSheet(onDismissRequest = { toc = false }) {
         Text("目录", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.headlineSmall)
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -289,10 +315,32 @@ private fun ReaderScreen(session: ReaderSession, settings: ReaderSettings, vm: L
 }
 
 @Composable
-private fun SettingsSheet(settings: ReaderSettings, update: (ReaderSettings) -> Unit, dismiss: () -> Unit) {
+private fun PageProgressSheet(page: Int, pages: Int, title: String, jump: (Int) -> Unit, dismiss: () -> Unit) {
+    var selected by remember(page, pages) { mutableFloatStateOf(page.toFloat()) }
+    ModalBottomSheet(onDismissRequest = dismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 28.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("章节进度", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                TextButton(onClick = dismiss) { Text("完成") }
+            }
+            Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(16.dp))
+            val targetPage = kotlin.math.round(selected).toInt().coerceIn(1, pages)
+            Text("第$targetPage/${pages}页", style = MaterialTheme.typography.titleMedium)
+            Slider(value = selected, onValueChange = { selected = it },
+                onValueChangeFinished = { jump(kotlin.math.round(selected).toInt().coerceIn(1, pages)) },
+                valueRange = 1f..pages.coerceAtLeast(2).toFloat(), enabled = pages > 1)
+            Text(if (pages == 1) "当前章节只有一页" else "拖动预览页码，松手跳转；页数仅对应当前章节和排版。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun SettingsSheet(settings: ReaderSettings, update: (ReaderSettings) -> Unit, reset: () -> Unit, dismiss: () -> Unit) {
+    var confirmReset by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = dismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 28.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("阅读设置", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold); TextButton(onClick = dismiss) { Text("完成") } }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("阅读设置", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold); TextButton(onClick = { confirmReset = true }) { Text("重置") }; TextButton(onClick = dismiss) { Text("完成") } }
             Spacer(Modifier.height(14.dp))
             Text("阅读方式", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(6.dp))
@@ -300,7 +348,7 @@ private fun SettingsSheet(settings: ReaderSettings, update: (ReaderSettings) -> 
             Spacer(Modifier.height(12.dp))
             Text("主题", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ReadingTheme.entries.forEach { theme -> FilterChip(selected = theme == settings.theme, onClick = { update(settings.copy(theme = theme)) }, label = { Text(theme.label) }) } }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ReadingTheme.entries.forEach { theme -> FilterChip(selected = theme == settings.theme, onClick = { update(settings.copy(theme = theme)) }, label = { Text(theme.label) }) } }
             Spacer(Modifier.height(12.dp)); Text("字号  ${settings.fontSize.toInt()} sp", style = MaterialTheme.typography.labelLarge)
             Slider(settings.fontSize, { update(settings.copy(fontSize = it)) }, valueRange = 14f..32f, steps = 17)
             Text("行距  ${"%.1f".format(settings.lineHeight)}", style = MaterialTheme.typography.labelLarge)
@@ -310,6 +358,11 @@ private fun SettingsSheet(settings: ReaderSettings, update: (ReaderSettings) -> 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text("使用衬线字体", style = MaterialTheme.typography.bodyLarge); Switch(settings.serif, { update(settings.copy(serif = it)) }) }
         }
     }
+    if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false },
+        title = { Text("重置阅读设置？") },
+        text = { Text("恢复跟随系统主题、分页、20 sp 字号、1.8 倍行距、24 页边距和衬线字体。不会删除书籍、进度或书签。") },
+        confirmButton = { TextButton(onClick = { reset(); confirmReset = false }) { Text("重置") } },
+        dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("取消") } })
 }
 
 @Composable

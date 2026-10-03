@@ -19,6 +19,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Numbers
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
@@ -67,6 +68,8 @@ class PdfActivity : AppCompatActivity() {
         val header = ComposeView(this).apply { setContent {
             val settings = remember { ReaderPreferences(this@PdfActivity) }.settings.collectAsState()
             ReadXTheme(settings.value.theme) {
+                val background = MaterialTheme.colorScheme.background.toArgb()
+                SideEffect { root.setBackgroundColor(background) }
                 Column {
                     TopAppBar(modifier = Modifier.height(56.dp), windowInsets = WindowInsets(0), title = {
                         Column {

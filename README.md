@@ -2,7 +2,7 @@
 
 本地优先的个人 Android 阅读器。原生 Kotlin / Jetpack Compose / Material 3 Expressive。
 
-## 当前版本：0.2.0 开发预览
+## 当前版本：0.2.1 开发预览
 
 本仓库正在从空项目实现第一阶段阅读闭环，不是全部需求已完成的正式版。
 
@@ -14,6 +14,11 @@
 - TXT：UTF-8 / BOM / UTF-16 / GB18030 识别，中文和英文章节标题识别，基础目录。
 - EPUB：OPF 元数据、spine 阅读顺序、EPUB 3 nav / EPUB 2 NCX 章节名称，正文、图片、章节内/章节间链接。
 - EPUB / TXT：默认按屏幕分页，左右滑动/上一页/下一页；章末连续翻页会进入下一章，向前返回上一章末页。可在阅读设置切换滚动模式。字号、行距、页边距、字体与主题变化后重新排版。
+- TXT / EPUB 翻页增加约 220ms 平移过渡，手势拖动跟手；跨章节使用短淡入淡出，遵循系统关闭动画的设置。
+- 分页底部显示「第X/XX页」，点击打开章节进度滑条；拖动只预览页码，松手才跳转，不重新加载 HTML。页数仅对应当前章节和排版，不是全书固定页码。
+- 阅读设置支持确认后重置为默认值，并新增纯黑主题；重置不删除书籍、进度或书签。主题选项自动换行。
+- EPUB 章节内/章节间本地链接跳转后保留目标位置，提供「回到原处」按钮；系统返回也优先回到来源。最多保留 32 层会话返回位置，仍使用章节/相对位置，不是精确文字锚点。
+- 首页与文本阅读由外层统一处理系统栏、显示缺口和键盘安全区；导航手势条颜色与明暗图标随主题更新。
 - EPUB / TXT 正文搜索（逐章扫描，中文可用，最多 100 个结果），结果跳转和 WebView 查找标记。
 - 阅读章节和相对滚动位置保存；启动直接进入书架，点开书籍后恢复进度。
 - 满足系统条件时使用 AndroidX PDF：连续页面、缩放、文本选择、书内搜索、页码跳转、基础页码恢复。
@@ -26,7 +31,7 @@
 
 - 高亮、划线、笔记、笔记导出、内置查词/翻译、联网元数据刮削、完整备份恢复尚未实现。
 - PDF 目录、持久化批注、裁边、OCR、反色/重排尚未实现。PDF 文档仍保留原色，应用主题不等于 PDF 反色。
-- 当前 EPUB 是安全本地 WebView 基础适配器，不是完整 Readium 阅读引擎。暂不支持 DRM、字体混淆、固定版式、音视频、弹出脚注、完整引用跳转/返回栈。
+- 当前 EPUB 是安全本地 WebView 基础适配器，不是完整 Readium 阅读引擎。暂不支持 DRM、字体混淆、固定版式、音视频、非 spine 注释文档、弹出脚注及完整引用兼容。当前返回栈只在阅读会话中保留，不随进程终止持久化。
 - 目录按 spine 章节呈现；同一章多个目录锚点尚未完整呈现。
 - 排版变化后的滚动恢复使用相对滚动比例，不是精确文本定位；后续批注阶段必须升级为稳定文字锚点。
 - 大书全文搜索尚无 FTS 索引，属于第一阶段直接扫描实现；扫描 PDF 不可全文搜索。
@@ -71,7 +76,7 @@ APK：E:\ReadX\app\build\outputs\apk\debug\app-debug.apk
 ~~~powershell
 . E:\Android\android-dev-env.ps1
 adb devices
-.\gradlew.bat connectedDebugAndroidTest
+.\gradlew.bat connectedDebugAndroidTest '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true'
 adb install -r E:\ReadX\app\build\outputs\apk\debug\app-debug.apk
 adb shell am start -n io.readx.app/.MainActivity
 ~~~

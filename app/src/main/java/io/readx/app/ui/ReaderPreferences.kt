@@ -4,7 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class ReadingTheme(val label: String) { SYSTEM("跟随系统"), DAY("日间"), NIGHT("夜间"), WARM("暖色") }
+enum class ReadingTheme(val label: String) { SYSTEM("跟随系统"), DAY("日间"), NIGHT("夜间"), BLACK("纯黑"), WARM("暖色") }
 enum class ReadingLayout(val label: String) { PAGED("分页"), SCROLL("滚动") }
 
 data class ReaderSettings(
@@ -27,6 +27,8 @@ class ReaderPreferences(context: Context) {
         serif = prefs.getBoolean("serif", true),
     ))
     val settings = state.asStateFlow()
+    fun reset() = update(ReaderSettings())
+
     fun update(value: ReaderSettings) {
         state.value = value
         prefs.edit().putString("theme", value.theme.name).putString("layout", value.layout.name)

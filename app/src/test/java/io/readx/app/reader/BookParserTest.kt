@@ -94,6 +94,22 @@ class BookParserTest {
         assertEquals(50, book.copy(format = "PDF", chapterIndex = 4).progress())
         assertNull(book.copy(totalUnits = 0).progress())
     }
+    @Test fun fractionalDensityUsesTheSameIntegralWidthForViewportAndColumns() {
+        val html = LocalHtml.prepare("<p>正文</p>", ReaderSettings(), "#111111", "#ffffff", 411.42856f, 721.1429f)
+        assertTrue(html.contains("width=411, height=720"))
+        assertTrue(html.contains("width: 411.0px !important"))
+        assertTrue(html.contains("height: 720.0px !important"))
+        assertTrue(html.contains("column-width: 363.0px !important"))
+        assertTrue(html.contains("width: calc(100% + 24.0px)"))
+    }
+    @Test fun blackThemeKeepsTheSecurePagedReader() {
+        val settings = ReaderSettings(theme = io.readx.app.ui.ReadingTheme.BLACK)
+        val html = LocalHtml.prepare("<p>纯黑阅读</p><script>evil()</script>", settings, "#E6E6E6", "#000000")
+        assertTrue(html.contains("background: #000000 !important"))
+        assertTrue(html.contains("column-fill: auto"))
+        assertTrue(html.contains("script-src 'none'"))
+        assertTrue(Jsoup.parse(html).select("script").isEmpty())
+    }
     private fun zip(entries: Map<String, String>): File {
         val file = temp.newFile("book-" + System.nanoTime() + ".epub")
         ZipOutputStream(file.outputStream()).use { zip -> entries.forEach { (name, text) ->

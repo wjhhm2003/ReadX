@@ -12,7 +12,9 @@ import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-data class ReaderSession(val book: Book, val chapters: List<Chapter>, val chapter: Int = book.chapterIndex, val fraction: Float = book.scrollFraction, val target: String? = null, val find: String? = null, val occurrence: Int = 0)
+data class ReaderLocation(val chapter: Int, val fraction: Float)
+
+data class ReaderSession(val book: Book, val chapters: List<Chapter>, val chapter: Int = book.chapterIndex, val fraction: Float = book.scrollFraction, val target: String? = null, val find: String? = null, val occurrence: Int = 0, val navigationId: Long = 0, val returnStack: List<ReaderLocation> = emptyList())
 data class SearchHit(val book: Book, val chapter: Chapter, val snippet: String, val query: String, val occurrence: Int)
 
 class LibraryViewModel(app: Application) : AndroidViewModel(app) {
@@ -21,6 +23,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     val bookmarks = repository.dao.observeBookmarks().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val preferences = ReaderPreferences(app)
     private var latestFraction = 0f
+    private var navigationSerial = 0L
+    private fun nextNavigationId() = ++navigationSerial
     val settings = preferences.settings
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
@@ -49,7 +53,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             val chapters = repository.dao.chapters(book.id)
             if (chapters.isNotEmpty()) {
                 latestFraction = bookmark.fraction
-                _reader.value = ReaderSession(book, chapters, bookmark.chapter.coerceIn(chapters.indices), bookmark.fraction)
+                _reader.value = ReaderSession(book, chapters, bookmark.chapter.coerceIn(chapters.indices), bookmark.fraction, navigationId = nextNavigationId())
             }
         }
     }
@@ -89,7 +93,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
                 val chapters = repository.dao.chapters(book.id)
                 if (chapters.isEmpty()) return@launch
                 latestFraction = latest.scrollFraction
-                _reader.value = ReaderSession(latest, chapters, latest.chapterIndex.coerceIn(chapters.indices))
+                _reader.value = ReaderSession(latest, chapters, latest.chapterIndex.coerceIn(chapters.indices), navigationId = nextNavigationId())
                 repository.dao.savePosition(book.id, _reader.value!!.chapter, latest.scrollFraction, System.currentTimeMillis())
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { notify(e.message ?: "打开失败") }
@@ -98,9 +102,27 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     fun chapter(index: Int, target: String? = null, fraction: Float = 0f) {
         val session = _reader.value ?: return
         if (index !in session.chapters.indices) return
-        _reader.value = session.copy(chapter = index, fraction = fraction, target = target, find = null)
+        _reader.value = session.copy(chapter = index, fraction = fraction, target = target, find = null, navigationId = nextNavigationId())
         savePosition(session.book.id, index, fraction)
     }
+    fun followLink(index: Int, target: String?, sourceFraction: Float) {
+        val session = _reader.value ?: return
+        if (index !in session.chapters.indices) return
+        val origin = ReaderLocation(session.chapter, sourceFraction.coerceIn(0f, 1f))
+        _reader.value = session.copy(chapter = index, fraction = 0f, target = target, find = null,
+            navigationId = nextNavigationId(), returnStack = (session.returnStack + origin).takeLast(32))
+        savePosition(session.book.id, index, 0f)
+    }
+    fun returnFromLink() {
+        val session = _reader.value ?: return
+        val origin = session.returnStack.lastOrNull() ?: return
+        _reader.value = session.copy(chapter = origin.chapter, fraction = origin.fraction, target = null, find = null,
+            navigationId = nextNavigationId(), returnStack = session.returnStack.dropLast(1))
+        savePosition(session.book.id, origin.chapter, origin.fraction)
+    }
+    fun isCurrentNavigation(id: String, navigationId: Long): Boolean =
+        _reader.value?.let { it.book.id == id && it.navigationId == navigationId } == true
+
     fun position(id: String, chapter: Int, fraction: Float) {
         val current = _reader.value ?: return
         if (current.book.id != id || current.chapter != chapter) return
@@ -176,7 +198,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         openJob?.cancel()
         openJob = viewModelScope.launch {
             val chapters = repository.dao.chapters(hit.book.id)
-            _reader.value = ReaderSession(hit.book, chapters, hit.chapter.ordinal, 0f, find = hit.query, occurrence = hit.occurrence)
+            _reader.value = ReaderSession(hit.book, chapters, hit.chapter.ordinal, 0f, find = hit.query, occurrence = hit.occurrence, navigationId = nextNavigationId())
         }
     }
 }
