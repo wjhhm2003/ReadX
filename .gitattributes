@@ -1,0 +1,8 @@
+# Preserve executable wrapper scripts on Unix and stable binary assets.
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.jar binary
+*.traineddata binary

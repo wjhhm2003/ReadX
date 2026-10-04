@@ -16,11 +16,13 @@ class PdfConversionRepository(private val context: Context, private val db: Libr
     val root = File(context.filesDir,"pdf-conversions").apply {mkdirs()}
     fun observe(id: String) = dao.observe(id)
     fun observeAll() = dao.observeAll()
-    suspend fun start(sourceBookId: String, options: PdfConversionOptions = models.snapshot("chi_sim+eng")): String = withContext(Dispatchers.IO) {
+    suspend fun start(sourceBookId: String, options: PdfConversionOptions? = null): String = withContext(Dispatchers.IO) {
+        models.ensureBundledModels()
+        val config = options ?: models.snapshot("chi_sim+eng")
         val source=library.dao.book(sourceBookId) ?: error("原书已移除")
         require(source.format=="PDF")
-        val id=digest(source.fingerprint+":"+options.key())
-        dao.insert(PdfConversion(id,source.id,source.fingerprint,options.key(),options.json()))
+        val id=digest(source.fingerprint+":"+config.key())
+        dao.insert(PdfConversion(id,source.id,source.fingerprint,config.key(),config.json()))
         val task=dao.get(id)!!
         if(task.stage=="COMPLETE" && task.resultBookId?.let {library.dao.book(it)}!=null) return@withContext id
         enqueue(id)
@@ -38,6 +40,7 @@ class PdfConversionRepository(private val context: Context, private val db: Libr
     suspend fun resume(id: String): String = withContext(Dispatchers.IO) {
         val task=dao.get(id) ?: error("任务不存在")
         val old=PdfConversionOptions.parse(task.optionsJson)
+        models.ensureBundledModels()
         val latest=models.snapshot(old.languages)
         if(latest==old) {enqueue(id);return@withContext id}
         this@PdfConversionRepository.cancel(id)

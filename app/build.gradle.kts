@@ -1,8 +1,12 @@
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+val bundledOcr = providers.gradleProperty("bundledOcr").map { it.toBooleanStrict() }.orElse(false).get()
+
 android {
     namespace = "io.readx.app"
     compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -11,7 +15,8 @@ android {
         minSdk = 28
         targetSdk = 36
         versionCode = 9
-        versionName = "0.5.0"
+        versionName = if (bundledOcr) "0.5.0-ocr" else "0.5.0"
+        buildConfigField("boolean", "BUNDLED_OCR", bundledOcr.toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -32,6 +37,7 @@ android {
             versionNameSuffix = "-preview"
         }
     }
+    if (bundledOcr) sourceSets.getByName("main").assets.directories.add("src/ocrBundled/assets")
     testOptions { unitTests.isReturnDefaultValues = true }
     packaging { resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
 }
@@ -65,4 +71,29 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+if (bundledOcr) {
+    val verifyModels = tasks.register("verifyBundledOcrModels") {
+        val assets = layout.projectDirectory.dir("src/ocrBundled/assets/ocr")
+        inputs.dir(assets)
+        doLast {
+            val manifest = groovy.json.JsonSlurper().parse(assets.file("manifest.json").asFile) as Map<*, *>
+            val models = manifest["models"] as Map<*, *>
+            for (name in listOf("chi_sim", "chi_tra", "eng")) {
+                val model = assets.file("$name.traineddata").asFile
+                check(model.isFile) { "Missing $name.traineddata. Run scripts/prepare-ocr-models.ps1 first." }
+                val entry = models[name] as Map<*, *>
+                check(model.length() == (entry["bytes"] as Number).toLong()) { "Invalid $name size" }
+                val digest = MessageDigest.getInstance("SHA-256")
+                model.inputStream().use { input ->
+                    val buffer = ByteArray(65536)
+                    while (true) { val read = input.read(buffer); if (read < 0) break; digest.update(buffer, 0, read) }
+                }
+                val hash = digest.digest().joinToString("") { "%02x".format(it) }
+                check(hash == entry["sha256"]) { "Invalid $name SHA-256" }
+            }
+        }
+    }
+    tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(verifyModels) }
 }

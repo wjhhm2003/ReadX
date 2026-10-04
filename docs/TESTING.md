@@ -1,5 +1,24 @@
 # ReadX 验证记录
 
+## GitHub 首次公开与可选 OCR 构建（2026-10-04）
+
+### 整理内容
+
+- 用户确认新建公开 `wjhhm2003/ReadX`，原创代码采用 MIT。更新公开 README、CONTRIBUTING、NOTICE 和第三方清单；补齐 native OCR、Bouncy Castle、PDFBox NOTICE 及实际 AAR 字体 Liberation Sans 2.1.5 的 SIL OFL 1.1。许可证随 APK 打包，设置页离线枚举显示。
+- 将此前隔离交付的三模型版整理为可复现 `-PbundledOcr=true`，默认 false；同 applicationId / Room v5 / 旧书库语义不变。普通版无模型，内置版自动后台校验/部署，保留用户自选可用模型。
+- 固定模型提交、尺寸/SHA-256、原始许可和显式准备脚本进入 Git；二进制不入 Git。普通版无需模型就能编译，内置版 preBuild 会拒绝缺失/错误模型。
+
+### 本轮实际验证
+
+- 普通版 `assembleDebug testDebugUnitTest lintDebug assemblePreview --offline` 通过；36 项 JVM 全过，Lint 0 错误、40 警告。专用 Pixel_6_API_36 / emulator-5554 设备报告 5 项：3 通过、2 按普通版不内置模型的预期跳过。通过包内资源选项验证、Room 4→5 保留数据及文字层 PDF 转换/去重/导出/来源删除关系。
+- 内置版 `assembleDebug testDebugUnitTest lintDebug -PbundledOcr=true --offline` 通过；36 项 JVM 全过，Lint 0 错误、40 警告。内置版设备报告 3 项全部通过、0 失败/错误/跳过：实际资源符合开关；隔离空偏好部署简中/繁中/英文、SHA/大小/初始化/幂等检查；不用手动导入的繁中＋英文识别。
+- 初次新直接 OCR 测试使用了与生产 Worker 不同的默认 PSM，繁中行未识别；明确使用生产同样的 PSM_AUTO、合适完整页输入及繁中＋英文组合后实际文本断言通过。没有更改生产 OCR 以猜测校对结果，也没有删掉中文识别断言。
+- 模型准备 PowerShell/Python 脚本从本地固定文件验证通过；模型目录、待提交文件及完整已有 Git 历史路径审查未发现用户书籍、模型二进制、APK、local.properties 或签名密钥；受限文本凭据特征扫描无匹配，不描述为安全审计保证。
+- 不重跑全部历史 UI/PDF/扫描版式/旧系统/长期压力套件；先前 0.5.0 的历史验收不冒充此次全部重跑。系统设备上仅更新 APK，未卸载、pm clear 或 wipe-data；隔离测试资源只清理自身范围。
+
+最终 GitHub Release 的 APK 大小、SHA-256、源提交及发布信息以 Releases 的校验文件/说明为准；不把之前临时工作树 APK 冒称本轮发布产物。
+
+
 ## 0.5.0 Material 3 Expressive 统一与系统手势区（2026-10-04）
 
 ### 本轮范围

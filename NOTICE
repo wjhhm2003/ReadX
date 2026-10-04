@@ -1,0 +1,63 @@
+ReadX
+Copyright (c) 2026 wjhhm2003 and ReadX contributors
+Original ReadX source code is licensed under the MIT License (see LICENSE).
+Third-party materials retain their own copyrights and licences.
+
+Runtime and build dependencies
+------------------------------
+AndroidX (including Jetpack Compose, Room, WebKit, PDF and WorkManager),
+Material Components for Android, Kotlin, Kotlin coroutines, AGP, KSP and
+Gradle are used under their upstream Apache-2.0 licences and notices.
+Pinned direct versions and upstream links are listed in docs/THIRD_PARTY.md.
+
+jsoup 1.21.2: MIT; Copyright Jonathan Hedley and contributors.
+PdfBox-Android 2.0.27.0: Apache-2.0 and included font/resource licences;
+Copyright Tom Roush, the Apache Software Foundation and upstream authors.
+See assets/licenses/PdfBox-Android.txt and PdfBox-NOTICE.txt for the full
+PDFBox, FontBox, PaDaF, Adobe glyph/font/CMap and other resource notices.
+PDFBox also packages unmodified Liberation Sans Regular 2.1.5:
+Copyright (c) 2010 Google Corporation and (c) 2012 Red Hat, Inc.;
+SIL Open Font License 1.1 with the upstream Reserved Font Names.
+Its original full licence is assets/licenses/Liberation-Fonts.txt.
+Bouncy Castle 1.72 (PDFBox transitive crypto libraries): upstream MIT-style
+licence; Copyright The Legion of the Bouncy Castle Inc.
+
+Tesseract4Android Standard 4.9.0: Apache-2.0; Adaptech s.r.o., Robert Posel
+and contributors. Its vendored Tesseract engine is Apache-2.0; Leptonica
+uses a BSD-2-Clause-style licence; libpng uses the PNG Reference Library
+License; libjpeg uses the Independent JPEG Group's licence. This software
+is based in part on the work of the Independent JPEG Group.
+Original native licence texts are included in app/src/main/assets/licenses.
+Android system/NDK libraries are platform dependencies, not replaced by MIT.
+
+Adapted code
+------------
+pdf-craft: MIT; Copyright (c) 2025 Tao Zeyu.
+Pinned commit 7d72c86bf4b77705767e90b8ae2d4881b37e79fa.
+PdfTextFlow.kt adapts a limited Latin split-word/paragraph flow rule from
+extractor/chapter/jointer.py. The remaining geometry/lifecycle code is
+ReadX integration, not a complete port of pdf-craft's AI/OCR engine.
+
+epub-generator: MIT; Copyright (c) 2025 Moskize91.
+Version 0.1.7, template reference commit
+8223cc33142f5682d581ee907f85de45b4c94970.
+EpubOutput.kt adapts EPUB package/container/navigation/ZIP organization
+for Kotlin. No upstream Python, LaTeX/GPU, remote service or LLM is bundled.
+
+Optional OCR models
+-------------------
+Official tesseract-ocr/tessdata_fast, tag 4.1.0, commit
+65727574dfcd264acbb0c3e07860e4e9e9b22185: Apache-2.0.
+The chi_sim, chi_tra and eng models are excluded from source-control history.
+They are included only in the explicitly selected bundledOcr APK. Each
+bundled model is unmodified and verified against the tracked manifest;
+its upstream licence is included with the assets and in app notices.
+
+Scope
+-----
+This NOTICE supplements, and does not replace, upstream licence texts.
+Marker, Calibre, k2pdfopt and Readium are NOT bundled dependencies.
+Application asset licence copies are at app/src/main/assets/licenses;
+upstream version/provenance and hashes are in docs/THIRD_PARTY.md and
+app/src/ocrBundled/assets/ocr/manifest.json. Nothing here implies upstream
+authors endorse ReadX, nor does ReadX's MIT licence cover users' books.

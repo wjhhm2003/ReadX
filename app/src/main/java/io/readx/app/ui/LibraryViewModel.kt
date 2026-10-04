@@ -26,6 +26,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     val conversions = readx.conversions
     val conversionTasks = conversions.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val models = readx.ocrModels.models
+    val bundledModelState = readx.ocrModels.bundledState
     private val _conversionId = MutableStateFlow<String?>(null)
     val conversionId = _conversionId.asStateFlow()
     private val _modelBusy = MutableStateFlow(false)
@@ -104,13 +105,14 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     fun closeLicenses() {_licenses.value=null}
     fun showLicenses()=viewModelScope.launch {
         _licenses.value=withContext(Dispatchers.IO) {
-            listOf("pdf-craft","epub-generator","PdfBox-Android","Tesseract4Android").joinToString("\n\n") {name->
-                "$name\n"+getApplication<Application>().assets.open("licenses/$name.txt").reader().use {it.readText()}
+            val assets = getApplication<Application>().assets
+            assets.list("licenses").orEmpty().filter { it.endsWith(".txt") }.sorted().joinToString("\n\n") {name->
+                "${name.removeSuffix(".txt")}\n" + assets.open("licenses/$name").reader().use {it.readText()}
             }
         }
     }
     fun convertPdf(book: Book) = viewModelScope.launch {
-        try { _conversionId.value = conversions.start(book.id,readx.ocrModels.snapshot(settings.value.ocrLanguages)) }
+        try { readx.ocrModels.ensureBundledModels(); _conversionId.value = conversions.start(book.id,readx.ocrModels.snapshot(settings.value.ocrLanguages)) }
         catch(e: CancellationException) {throw e} catch(_: Exception) {notify("无法开始转换，请使用原版阅读")}
     }
     fun showConversion(id: String) { if(id.matches(Regex("[a-f0-9]{64}"))) _conversionId.value=id }
@@ -118,6 +120,13 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelConversion(id: String) = viewModelScope.launch { conversions.cancel(id) }
     fun resumeConversion(id: String) = viewModelScope.launch {
         try {_conversionId.value=conversions.resume(id)} catch(e: CancellationException) {throw e} catch(_: Exception) {notify("无法继续：请检查原 PDF 和模型")}
+    }
+    fun retryBundledModels() = viewModelScope.launch {
+        _modelBusy.value = true
+        try { readx.ocrModels.ensureBundledModels() }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { notify("内置模型部署失败，可重试或手动导入") }
+        finally { _modelBusy.value = false }
     }
     fun importModels(uris: List<Uri>) = viewModelScope.launch {
         _modelBusy.value=true

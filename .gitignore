@@ -11,4 +11,18 @@ captures/
 /*.epub
 /*.pdf
 
-/*.traineddata
+*.traineddata
+
+# APKs, signatures and private acceptance inputs never belong to Git source history.
+*.apk
+*.aab
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+credentials.json
+.env
+.env.*
+
+app/src/ocrBundled/assets/ocr/model-*.tmp

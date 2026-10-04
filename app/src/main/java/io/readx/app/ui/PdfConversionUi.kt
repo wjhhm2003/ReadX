@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package io.readx.app.ui
 
+import io.readx.app.BuildConfig
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -24,6 +25,7 @@ import io.readx.app.pdf.PdfActivity
 internal fun PdfConversionSettings(vm: LibraryViewModel) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val models by vm.models.collectAsStateWithLifecycle()
+    val bundledState by vm.bundledModelState.collectAsStateWithLifecycle()
     val busy by vm.modelBusy.collectAsStateWithLifecycle()
     val tasks by vm.conversionTasks.collectAsStateWithLifecycle()
     val context=LocalContext.current
@@ -31,7 +33,7 @@ internal fun PdfConversionSettings(vm: LibraryViewModel) {
     val permissions=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val import=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(),vm::importModels)
     Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-        Text("PDF 转为电子书",style=MaterialTheme.typography.titleMedium)
+        Text(if (BuildConfig.BUNDLED_OCR) "PDF 转为电子书 · 内置 OCR 版" else "PDF 转为电子书",style=MaterialTheme.typography.titleMedium)
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
             Text("将 PDF 转为电子书",Modifier.weight(1f))
             Switch(settings.pdfToEpubEnabled,{ enabled->
@@ -44,8 +46,10 @@ internal fun PdfConversionSettings(vm: LibraryViewModel) {
             listOf("chi_sim+eng" to "简中＋英文","chi_tra+eng" to "繁中＋英文","eng" to "英文").forEach {(key,label)->FilterChip(settings.ocrLanguages==key,{vm.preferences.update(settings.copy(ocrLanguages=key))},{Text(label)})}
         }
         Text(listOf("chi_sim" to "简中","chi_tra" to "繁中","eng" to "英文").joinToString(" · ") {(key,label)->"$label：${if(models[key]!=null) "已导入" else "未导入"}"},style=MaterialTheme.typography.bodySmall)
-        OutlinedButton(onClick={import.launch(arrayOf("*/*"))},enabled=!busy,modifier=Modifier.testTag("import-ocr-model")) {Text(if(busy) "校验模型中…" else "导入 OCR 模型")}
-        Text("仅接受 chi_sim、chi_tra、eng.traineddata；单文件最多 64 MiB。模型不随 APK 提供。",style=MaterialTheme.typography.bodySmall)
+        if (BuildConfig.BUNDLED_OCR) Text(bundledState, style=MaterialTheme.typography.bodySmall)
+        if(bundledState.contains("失败")) TextButton(onClick={vm.retryBundledModels()}, enabled=!busy) {Text("重新部署内置模型")}
+        OutlinedButton(onClick={import.launch(arrayOf("*/*"))},enabled=!busy,modifier=Modifier.testTag("import-ocr-model")) {Text(if(busy) "校验模型中…" else (if (BuildConfig.BUNDLED_OCR) "替换 / 导入 OCR 模型" else "导入 OCR 模型"))}
+        Text("仅接受 chi_sim、chi_tra、eng.traineddata；单文件最多 64 MiB。" + (if (BuildConfig.BUNDLED_OCR) "本 APK 已内置三个模型，无需手动导入。" else "模型不随 APK 提供。"),style=MaterialTheme.typography.bodySmall)
         TextButton(onClick={vm.showLicenses()}) {Text("开源组件与许可证")}
         if(tasks.isNotEmpty()) Text("转换任务",style=MaterialTheme.typography.titleSmall)
         tasks.take(10).forEach {task->TextButton(onClick={vm.showConversion(task.id)}) {Text("${task.label} · ${task.completedPages}/${task.totalPages} 页")}}

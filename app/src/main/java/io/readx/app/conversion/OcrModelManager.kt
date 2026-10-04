@@ -1,9 +1,13 @@
 package io.readx.app.conversion
 
+import io.readx.app.BuildConfig
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.googlecode.tesseract.android.TessBaseAPI
+import org.json.JSONObject
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +23,59 @@ class OcrModelManager(private val context: Context) {
     private val lock = Mutex()
     private val mutableModels = MutableStateFlow(read())
     val models = mutableModels.asStateFlow()
+    private val mutableBundledState = MutableStateFlow(if (BuildConfig.BUNDLED_OCR) "准备内置模型…" else "")
+    val bundledState = mutableBundledState.asStateFlow()
+
+    /** One-time, bounded asset deployment. Never overwrite a working user-selected version. */
+    suspend fun ensureBundledModels() = withContext(Dispatchers.IO) {
+        if (!BuildConfig.BUNDLED_OCR) return@withContext
+        lock.withLock {
+        try {
+            val manifest = context.assets.open("ocr/manifest.json").bufferedReader().use { JSONObject(it.readText()).getJSONObject("models") }
+            for ((index, name) in SUPPORTED.withIndex()) {
+                ensureActive()
+                val current = mutableModels.value[name]
+                if (current != null && model(name, current).isFile) continue
+                mutableBundledState.value = "正在部署内置模型 ${index + 1}/${SUPPORTED.size}"
+                val expected = manifest.getJSONObject(name)
+                val hash = expected.getString("sha256")
+                val bytes = expected.getLong("bytes")
+                require(bytes in 1..64L * 1024 * 1024)
+                val destination = model(name, hash)
+                destination.parentFile!!.mkdirs()
+                val temporary = File.createTempFile("bundled-", ".tmp", destination.parentFile)
+                try {
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    context.assets.open("ocr/$name.traineddata").use { input -> temporary.outputStream().use { output ->
+                        val buffer = ByteArray(65536)
+                        var copied = 0L
+                        while (true) {
+                            ensureActive()
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            copied += n
+                            require(copied <= bytes) { "内置模型大小不匹配" }
+                            digest.update(buffer, 0, n)
+                            output.write(buffer, 0, n)
+                        }
+                        require(copied == bytes) { "内置模型不完整" }
+                    } }
+                    require(digest.digest().joinToString("") { "%02x".format(it) } == hash) { "内置模型校验失败" }
+                    Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                    val api = TessBaseAPI()
+                    try { require(api.init(destination.parentFile!!.parentFile!!.absolutePath, name, TessBaseAPI.OEM_LSTM_ONLY)) { "内置模型初始化失败" } }
+                    catch (e: Exception) { destination.delete(); throw e }
+                    finally { api.recycle() }
+                    ensureActive()
+                    check(preferences.edit().putString(name, hash).commit()) { "模型设置保存失败" }
+                    mutableModels.value = read()
+                } finally { temporary.delete() }
+            }
+            mutableBundledState.value = "简中、繁中、英文三个模型已就绪"
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { mutableBundledState.value = "内置模型部署失败，请重试"; throw e }
+    } }
+
     private fun read() = SUPPORTED.mapNotNull { name -> preferences.getString(name, null)?.let { name to it } }.toMap()
     internal fun reload() { mutableModels.value=read() }
     fun snapshot(languages: String): PdfConversionOptions = PdfConversionOptions(languages, models.value.filterKeys { it in languages.split('+') })

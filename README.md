@@ -1,133 +1,130 @@
 # ReadX
 
-本地优先的个人 Android 阅读器。原生 Kotlin / Jetpack Compose / Material 3 Expressive。
+**中文优先、离线可用的 Android 本地阅读器。** 支持 EPUB、TXT、PDF；原生 Kotlin + Jetpack Compose + Material 3 Expressive，无账号、无广告、无网络权限。
 
-## 当前版本：0.5.0 开发预览
+[下载预览版](https://github.com/wjhhm2003/ReadX/releases) · [开发路线](docs/ROADMAP.md) · [验证记录](docs/TESTING.md) · [第三方声明](docs/THIRD_PARTY.md) · [MIT 许可证](LICENSE)
 
-本仓库正在从空项目实现第一阶段阅读闭环，不是全部需求已完成的正式版。
+> 当前为 **0.5.0 开发预览**，不是全部需求已完成的正式发行版。Material 3 Expressive 与 AndroidX PDF 使用实验/预发布 API。首次打开大书的分页统计、PDF 兼容性和 OCR 质量仍有边界。
 
-### 已实现
+![ReadX 真实运行界面：自生成测试样书](docs/screenshots/md3-overview.png)
 
-- 统一 Material 3 Expressive 设计语言：浅色/深色语义表面、HCT 色调生成的强调色配对、统一字阶/圆角/8dp 间距节奏。动态取色继续默认关闭，纸张主题独立，保持既有偏好。
-- 首页保留 ReadX 标题、真实封面、横向继续阅读和圆角书库；四项导航恢复选中胶囊。可用宽度达到 600dp 时切换侧栏，内容限制在 840dp 内；设置与批注采用同一分组样式，大字体允许内容自然增高和筛选换行。
-- 系统手势条适配：底部导航背景延伸至小白条区域；阅读/PDF 操作栏展开时手势区与面板同色，按钮避开手势区，不叠加正文边距；书库输入法弹出时统一避让。
-- 阅读设置分成阅读方式、纸张主题和文字排版；阅读/PDF 覆盖式操作栏采用统一上圆角与选中态，不改变正文的测量区域。书库筛选不影响首页；文本进度明确标为“约”，PDF 保留真实页数进度。设计约定见 `docs/DESIGN.md`。
+截图来自专用模拟器上的真实运行，使用自生成测试样书，不是设计稿或用户私人书籍。
 
-- 设置中的「将 PDF 转为电子书」全局开关默认关闭。开启后点开 PDF 按需生成独立 EPUB 转换版，原 PDF 不变；同来源/配置命中直接打开转换版。关闭开关不删除已有转换版。
-- 转换逐页优先提取文字层，缺少或损坏文字层时使用本地 Tesseract OCR；支持混合文档。模型由用户从 SAF 导入 `chi_sim.traineddata`、`eng.traineddata` 和可选 `chi_tra.traineddata`，默认简中＋英文，单文件上限 64 MiB。模型不在 APK 中，也不自动联网下载。
-- 后台串行任务有真实原文页数进度、通知、取消与部分结果续算；缺模型时暂停等待，导入后点击「继续 / 重试」。可以退出弹层或先读原版；系统调度/进程限制可能中断任务，回来后可继续。通知权限可拒绝，应用内仍有进度。
-- 转换版进入现有 EPUB 阅读页，支持分页/滚动、排版设置、搜索、批注和进度；「进度」面板新增「查看原 PDF」与「导出 EPUB」。导出到系统选择的位置，可在其他 EPUB 阅读器打开。原 PDF 与转换版进度/批注独立，不自动把页坐标标记变成文字标记。
-- 正文重排支持基本单栏/双栏几何顺序、中文换行、英文断词、目录/标题分段；已检测到的复杂版式、表格/公式/插图及不可靠页面保留原图。没有获得可重排正文则明确失败，不用纯图片 EPUB 冒充完成。详细开源适配范围见 `docs/THIRD_PARTY.md`。
+## 功能
 
-- 系统文件选择器多文件导入 EPUB / TXT / PDF；复制到应用私有目录。
-- SHA-256 内容去重；失败导入回滚；移除应用副本不会修改原文件。
-- Room 本地书库、章节、阅读进度、TXT/EPUB 书签；编辑书名、作者和逗号分隔标签；书库筛选。数据库 1→2→3→4→5 显式迁移，保留原书籍与进度。
-- TXT：UTF-8 / BOM / UTF-16 / GB18030 识别，中文和英文章节标题识别，基础目录。
-- EPUB：OPF 元数据、spine 阅读顺序、EPUB 3 nav / EPUB 2 NCX 章节名称，正文、图片、章节内/章节间链接。
-- EPUB / TXT：默认按屏幕分页，左右滑动/上一页/下一页；章末连续翻页会进入下一章，向前返回上一章末页。可在阅读设置切换滚动模式。字号、行距、页边距、字体与主题变化后重新排版。
-- TXT / EPUB 默认屏幕分页，左右滑动及三分屏点击：左侧上一页、右侧下一页、中间显隐工具栏；链接和长按选字优先。默认隐藏控件，正文占满安全阅读区域；展开后上方只有返回按钮，下栏为目录、批注、进度、背景和排版，均覆盖正文，不预留无效空白，也不因显隐重新分页。
-- 底部直接显示目录、进度条与全书页码。当前章节先显示并恢复位置，再渐进统计全书；复用前台实测页数，优先当前章附近，完整缓存命中不创建统计 WebView，完成后释放。未完成时显示本章页码和已统计章节数，不伪造全书总页数。拖动实时预览章节名称，松手一次跳转。
-- 分页缓存包含书籍内容指纹、章节顺序、实际宽高、密度/系统字体缩放、字号/行高/边距/字体、WebView/系统版本及语言；逐章原子写回，单书最多五种布局、全局最多 24 份。修改排版、模式或阅读区域时，优先用当前可见文字锚点恢复，失败才回退旧相对位置。缓存不含正文/批注，不改 Room 进度语义。
-- 阅读设置与目录首次直接完整展开，不再二次上滑；排版滑条松手后提交，避免拖动时反复重载正文。
-- 同一选段的同类标记改为原记录更新，六种持久化颜色；重叠/旧重复高亮仅一层透明度，不越标越深。旧记录/笔记不自动删减。取消附带笔记的高亮/划线时保留笔记，明确删除笔记才删除其文字。
-- 阅读设置支持重置、浅绿与纯黑背景。设置页面另有蓝/绿/紫/橙以及 RGB 自定义主题种子色和动态取色开关；主题应用完整表面/卡片/按钮色，并显示实际强调色预览，纸张颜色独立设置。动态取色要求 Android 12+，旧系统回退到选定颜色。
-- TXT / EPUB 荧光笔、下划线和文字笔记：长按、拖动选中正文，选区旁自动出现「复制 / 荧光笔 / 划线 / 写想法」操作条与颜色选择；点击既有标记可改色、取消标记或编辑笔记。稳定定位采用准备后 DOM 的 UTF-16 偏移、原文与前后文校验；歧义时不猜测恢复。批注支持重开恢复、编辑笔记、删除和跳回正文。
-- 首页「书签」改为「批注」，按书籍分组，保留旧位置书签；Room 1→2→3→4 显式迁移，不清空原书库。
-- PDF 保留纵向高级查看器，并增加横向单页模式：滚动模式各页任意位置单击显隐底栏；翻页模式左/右 1/3 单击上一页/下一页，中间 1/3 单击显隐底栏；左右滑页、双指缩放、长按拖动文字/区域选区后选择荧光笔、下划线或笔记。已存在的标记仍可点击编辑（翻页模式在中间区），原生文字选区优先。高级纵向查看器的选字菜单也接入批注。标记保存在应用侧，以页码和归一化坐标恢复，不改写原 PDF；扫描件可区域批注，不等于 OCR。
-- EPUB 章节内/章节间本地链接保留目标位置，提供「回到原处」；最多 32 层会话返回位置。新来源位置可以携带文字锚点，旧位置仍保留相对位置兼容。
-- EPUB / TXT 正文搜索（逐章扫描，中文可用，最多 100 个结果），结果跳转和 WebView 查找标记。
-- 阅读章节和相对滚动位置保存；启动直接进入书架，点开书籍后恢复进度。
-- 满足系统条件时使用 AndroidX PDF：连续页面、缩放、文本选择、书内搜索、页码跳转、基础页码恢复。
-- 较旧系统回退为 PdfRenderer 横向单页、缩放和区域批注；文字提取需实际系统能力支持，旧系统不承诺选字，基础模式没有全文搜索和密码输入。横向模式暂不提供高级书内搜索入口，可切换纵向使用高级搜索。
-- 首页采用参考图的 ReadX 标题、继续阅读横向卡片、浅色书库列表与四项底部导航。导入入口位于顶部加号与菜单，不再用悬浮按钮遮挡书籍。
-- PDF 系统栏/安全区只处理一次，文档顶部对齐；控件隐藏时不预留工具栏高度。滚动模式任意页单击显隐下栏；翻页模式左/右三分之一翻页、中间显隐下栏。
-- 无网络权限、无账号、无广告。仅允许应用自带受控选区/标记脚本；书籍脚本与事件删除且 CSP 禁止执行，无脚本桥、外部资源和任意 file/content 访问。
+| 功能 | 当前实现 |
+| --- | --- |
+| 本地书库 | SAF 多文件导入、私有副本、SHA-256 内容去重；真实 EPUB 封面/PDF 首页缩略图；修改书名/作者/标签 |
+| TXT / EPUB | 按实测阅读区域分页或滚动；滑动和三分屏点击；目录、本地链接、中文搜索、字号/字体/行高/页边距与纸张主题 |
+| 全书页数 | 当前章先显示，渐进测量全书；多维布局缓存；统计完成前显示真实已测章节数，不用估算值冒充精确总数 |
+| 文字批注 | 高亮、划线、笔记、颜色、删除与重开恢复；DOM UTF-16 偏移＋原文/上下文校验，不宣称通用 EPUB CFI |
+| PDF 原版 | AndroidX 高级纵向查看器＋系统 PdfRenderer 回退；横向单页、缩放、页跳转与页/区域批注；功能按实际系统能力启用 |
+| PDF → EPUB | 可关闭、默认关闭；文字层提取＋离线 OCR；后台真实页数进度、取消/续算；生成独立 EPUB，不修改原 PDF；原页回看与 SAF 导出 |
+| 界面 | Material 3 Expressive、浅色/深色、动态/自定义主题色、沉浸正文、统一系统手势区；宽屏侧栏与内容限宽 |
 
-### 尚未实现 / 已知边界
+启动进入书架，不自动打开上次的书。TXT/EPUB 左右区域上一页/下一页，中间显隐工具栏；PDF 纵向任意位置单击显隐，横向左/中/右三等份翻页或显隐。选区、链接和已有标记仍有相应交互。
 
-- 本轮优化不更换 TXT/EPUB 的 WebView 引擎，也不承诺所有书籍毫秒级打开或零卡顿。精确全书页数仍使用同一 Chromium 引擎；文件/缓存 IO 在后台，WebView 操作在主线程。复杂 EPUB、超长章节及低端设备仍需兼容性与压力验收；跨进程的普通阅读进度仍保留章节/相对位置兼容，并未全面升级为文字锚点。
+## 两种 APK：包名相同
 
-- 批注导出、内置查词/翻译、联网元数据刮削、完整备份恢复尚未实现；批注目前只保存在应用私有数据库，卸载前请勿删除原应用。
-- PDF 原版查看器目录、裁边、反色及将批注写回 PDF/导出尚未实现。0.4.0 的 OCR/重排是独立 EPUB 转换功能，不改变原版 PDF。密码 PDF 首版不转换；完整竖排、手写、复杂论文和脚注结构不承诺。OCR 会产生错字，复杂内容检测不是完整语义识别。
-- 当前 EPUB 是安全本地 WebView 基础适配器，不是完整 Readium 阅读引擎。暂不支持 DRM、字体混淆、固定版式、音视频、非 spine 注释文档、弹出脚注及完整引用兼容。当前返回栈只在阅读会话中保留，不随进程终止持久化；新批注锚点不是通用 EPUB CFI。
-- 目录按 spine 章节呈现；同一章多个目录锚点尚未完整呈现。
-- 普通阅读进度与旧书签仍兼容相对位置；新批注独立使用文字锚点。复杂 EPUB、字体混淆和源文件被外部改写后的兼容性仍需测试。全书页数对应当前排版，字号、字体缩放、方向或阅读区域改变时需重新统计，大书首次统计可能较慢。
-- 大书全文搜索尚无 FTS 索引；扫描 PDF 原版默认不可全文搜索，经过 OCR 的转换版只能搜索已识别正文，原图回退页不等于有文字层。
-- 正文字号会跟随系统字体缩放，但超大字体、横屏、小屏等无障碍布局仍需完整验收。
-- EPUB 内嵌位图封面与 PDF 首页缩略图已接入；无封面/无法解码的文件显示格式封面。书库百分比：PDF 使用实际页数，TXT/EPUB 使用章节等权与章内位置估算，不宣称是按全文字数加权的精确进度。
-- 中文优先，暂未提取所有界面文案完成英文/多语言本地化。
-- 首版限制：源文件 256 MB，TXT 32 MB，EPUB 解压合计 160 MB / 单资源 24 MB / 单章 8 MB / 10000 个资源。
+| 预览包 | OCR 模型 | 适用情况 |
+| --- | --- | --- |
+| 普通版 `readx-0.5.0-preview.apk` | 不内置；从本地导入 | 希望安装包较小，或自行选择模型 |
+| 内置版 `readx-0.5.0-ocr-preview.apk` | 简中 `chi_sim`、繁中 `chi_tra`、英文 `eng` | 希望安装后离线可用，不手动准备模型 |
 
-## 环境
+**两版 applicationId 都是 `io.readx.app`，不能并存，安装会更新替换同一应用。** 本仓库的个人 Preview 使用本机调试密钥，不是正式发行签名；自己构建可能使用不同密钥，不能保证覆盖安装他人的 APK。请先导出需要保留的原书和转换版，**不要通过卸载/清空应用解决签名冲突**。
 
-| 项目 | 路径 |
-|---|---|
-| Android Studio | E:\Android\AndroidStudio\android-studio |
-| SDK | E:\Android\Sdk |
-| AVD | E:\Android\Avd |
-| Gradle 缓存 | E:\Android\Gradle |
-| Studio 配置 | E:\Android\StudioUser |
-| 环境脚本 | E:\Android\android-dev-env.ps1 |
+普通版在设置中通过系统文件选择器导入 `.traineddata`，单文件最多 64 MiB；内置版首次在后台校验并部署模型，已有可用用户模型不会被覆盖。语言可选“简中＋英文 / 繁中＋英文 / 英文”。三个模型不能保证所有文档都准确识别。
 
-- Gradle 9.3.1（Wrapper 带官方 SHA-256 校验）/ AGP 9.1.0。
-- SDK 36.1；target SDK 36；最低 Android 9 / API 28。
-- AndroidX PDF 高级路径要求 Android 12 / API 31 及 S 扩展 >=13，实际可用功能由系统支持决定。
-- Compose BOM 2026.01.00 + Material 3 1.5.0-alpha01（公开 Expressive API，实验版），固定到与现有 SDK 兼容的版本。
-- AGP 内置 Kotlin 2.2.10；Compose compiler plugin 2.2.10；KSP 2.3.12；Room 2.8.5。
+## 使用 PDF 转换
 
-在 Android Studio 中打开 E:\ReadX，使用提供的 JBR 和 SDK，等待同步。
+1. 在 **设置 → 将 PDF 转为电子书** 开启开关；不会批量转换整个书库。
+2. 选择识别语言；普通版扫描件需要先导入相应模型，有正常文字层不要求 OCR 模型。
+3. 点开 PDF，观察实际原文页数进度。缺模型时任务等待，导入后点击“继续 / 重试”；可先读原 PDF。
+4. 完成后打开独立转换版，使用现有 EPUB 排版/搜索/批注；进度面板可 **查看原 PDF / 导出 EPUB**。
 
-### PowerShell 构建
+复杂或不可靠内容保留原图，未获得可重排正文则明确失败。原 PDF 与转换版的进度、页码和批注独立；PDF 页坐标标记不自动变成文字标记。密码 PDF 首版不转换；原版查看器仍按系统支持处理。后台任务可能受系统配额、电量和进程限制中断，不承诺永久后台运行。
 
-~~~powershell
-cd E:\ReadX
-. E:\Android\android-dev-env.ps1
-.\gradlew.bat assembleDebug testDebugUnitTest lintDebug
-# 或使用环境加载入口：
-.\scripts\build.ps1
-~~~
+## 隐私与数据
 
-APK：E:\ReadX\app\build\outputs\apk\debug\app-debug.apk
+- 应用无 `INTERNET` 权限；没有远程 OCR、LLM、服务器、账号或广告。应用不会自动下载模型。
+- 导入后读取应用私有副本，不修改原文件；移除书库条目不删除原始文件。
+- 书籍、数据库、笔记和模型在私有目录；当前不额外加密，也不把应用当作加密保险库。
+- 系统自动备份关闭，尚未完成数据库/文件一致性备份恢复。**卸载会删除应用副本和私有批注**，原始文件不受影响。
+- 通知只报告阶段和页数；通知权限可拒绝，应用内仍可观察状态。生成 EPUB 可导出为独立文件。
+- 仓库不收录用户书籍、笔记、签名密钥、模型二进制或测试日志。第三方模型及组件保留各自许可证。
 
-### 设备测试与安装
+## 构建
 
-~~~powershell
-. E:\Android\android-dev-env.ps1
+### 环境
+
+Android Studio / JDK 17+（Java 源码目标 17），Android SDK 36.1；最低 Android 9 / API 28，target API 36。使用项目 Gradle Wrapper，不依赖全局 Gradle。
+
+固定组合：Gradle 9.3.1（含分发包 SHA-256）/ AGP 9.1.0 / AGP 内置 Kotlin 2.2.10 / Compose compiler 2.2.10 / KSP 2.3.12 / Compose BOM 2026.01.00 / Material 3 1.5.0-alpha01 / Room 2.8.5 / AndroidX PDF 1.0.0-beta01。实际值以构建配置为准，不需要为了编译自行升级依赖。
+
+在 Android Studio 打开仓库，或设置 `JAVA_HOME` / Android SDK。`local.properties` 仅是本机配置，不提交；Windows 路径示例：`sdk.dir=E\:/Android/Sdk`。仓库脚本在本机环境脚本存在时加载，否则使用调用者环境。
+
+### 普通版
+
+```powershell
+.\gradlew.bat assembleDebug testDebugUnitTest lintDebug assemblePreview
+```
+
+macOS/Linux 使用 `./gradlew`。依赖已下载时可添加 `--offline`，首次解析依赖需要开发电脑联网。普通版不需要下载 OCR 模型才能编译。
+
+输出：`app/build/outputs/apk/debug/app-debug.apk`、`app/build/outputs/apk/preview/app-preview.apk`。正式 Release 不内置签名凭据。
+
+### 内置三个模型的版本
+
+先显式准备固定版本模型，再构建。准备脚本访问的是开发电脑，不赋予 Android 应用联网权限。
+
+```powershell
+.\scripts\prepare-ocr-models.ps1
+.\gradlew.bat assemblePreview -PbundledOcr=true
+```
+
+或跨平台：
+
+```sh
+python3 scripts/prepare-ocr-models.py
+./gradlew assemblePreview -PbundledOcr=true
+```
+
+已有模型可完全离线准备：PowerShell 加 `-LocalModelDirectory /path/to/models`，Python 加 `--local-directory /path/to/models`。脚本和 Gradle 会核对文件大小及 SHA-256；没有模型或校验不符时不生成假内置包。
+
+模型来自官方 [tessdata_fast 4.1.0](https://github.com/tesseract-ocr/tessdata_fast/tree/4.1.0)，固定提交/哈希见 [模型清单](app/src/ocrBundled/assets/ocr/manifest.json)，原许可证一同打包。源码仓库只保存清单和许可证，`.traineddata` 被 Git 忽略。内置版仍输出同一构建路径，请将产物复制另存，避免与下一次普通构建混淆。
+
+### 设备验证
+
+```powershell
 adb devices
 .\gradlew.bat connectedDebugAndroidTest '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true'
-adb install -r E:\ReadX\app\build\outputs\apk\debug\app-debug.apk
-adb shell am start -n io.readx.app/.MainActivity
-~~~
+# 内置版定向验证（先准备模型）
+.\gradlew.bat connectedDebugAndroidTest -PbundledOcr=true '-Pandroid.testInstrumentationRunnerArguments.class=io.readx.app.BundledOcrInstrumentedTest' '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true'
+```
 
-设备测试应在专用模拟器运行。界面测试首次在空书库导入示例，重复运行会复用示例；导入/数据库测试使用隔离内存数据库，PDF 测试只清理自己创建的测试书籍。
+仅在专用模拟器/测试设备执行；Gradle 会安装更新 APK，保留 APK 参数不等于书库备份。R8 构建和设备 UI 测试分阶段运行，不同时争用资源。
 
-### 轻量自用预览包
+## 已知边界
 
-~~~powershell
-.\gradlew.bat assemblePreview
-adb install -r E:\ReadX\app\build\outputs\apk\preview\app-preview.apk
-~~~
+- EPUB 是基础本地 WebView 适配器，不是完整 Readium 引擎；不支持 DRM、固定版式、字体混淆、音视频及复杂脚注全兼容。
+- 普通阅读进度仍保留章节/相对位置兼容，文字锚点优先用于会话内重排及批注；书架文本百分比是章节等权估算。全书页数只对当前排版有效。
+- OCR 会有错字、漏字；竖排、手写、复杂双栏、扫描图表/公式和脚注顺序没有完整验收，启发式复杂区域检测不能代替语义理解。应与原 PDF 对照。
+- 原版扫描 PDF 默认不承诺全文可搜；OCR 转换版只能搜索已识别正文，原图回退页不是可搜索文字。
+- 批注导出、完整一致性备份、多语言本地化、PDF 裁边/反色和原 PDF 批注写回未实现；大字体、旧系统、低端设备、折叠屏和长期压力仍需扩展验证。
+- 256 MB 源文件 / TXT 32 MB；EPUB 解压合计 160 MB、单资源 24 MB、单章 8 MB、最多 10000 资源。异常或超限明确失败，不清空书库规避。
 
-Preview 启用 R8 / 资源压缩，并使用本机调试密钥签名；Debug 包包含调试工具和未裁剪依赖，体积更大。两者的 applicationId 相同，安装会替换彼此。正式 Release 签名需另行配置；不要把密钥或密码提交到仓库。
+## 项目结构与贡献
 
-## 结构
+- `data/`：Room v5、显式历史迁移、导入去重与私有副本。
+- `reader/`：TXT/EPUB、受控 HTML/选区脚本、分页与布局缓存。
+- `pdf/`：高级查看器、基础回退、PDF 生命周期与批注。
+- `conversion/`：PDF→EPUB、任务状态、检查点和本地 OCR。
+- `ui/`：Compose 界面、主题、设置及 ViewModel。
 
-- app/src/main/java/io/readx/app/data：Room 模型、私有文件、导入与去重。
-- app/src/main/java/io/readx/app/reader：TXT/EPUB 解析、本地 HTML 隔离阅读。
-- app/src/main/java/io/readx/app/pdf：AndroidX PDF 与基础渲染回退。
-- app/src/main/java/io/readx/app/ui：Expressive 主题、书库、搜索、排版设置、状态管理。
-- app/src/test：纯 JVM 解析、安全、编码测试。
-- app/src/androidTest：Room/导入和阅读 UI、PDF 设备测试。
-- docs/ROADMAP.md：后续阶段与验收边界。
+详见 [架构](docs/ARCHITECTURE.md)、[设计](docs/DESIGN.md)、[路线](docs/ROADMAP.md)、[验证记录](docs/TESTING.md)、[贡献指南](CONTRIBUTING.md)。历史验证是指定设备/版本的记录，不代表所有场景或本次发布全部重新测试。
 
-## 隐私
+## 许可证与致谢
 
-没有申请共享存储管理权限，也没有网络权限。导入文件、数据库和设置都在应用私有空间。当前关闭系统自动备份，因为尚未实现书库与文件一致性恢复；卸载会删除应用副本，原始书籍文件不受影响。开发版本没有额外加密数据库或文件，不应当把它当作安全加密保险库。
+ReadX 原创代码采用 **[MIT License](LICENSE)**，版权所有 © 2026 wjhhm2003 及贡献者。第三方代码、适配片段、字体资源与模型**不因项目采用 MIT 而改为 MIT**，仍遵循各自条款。
 
-## 完整验收入口
-
-~~~powershell
-.\scripts\verify.ps1 -DeviceTests
-~~~
-
-验证记录见 docs/TESTING.md。设备测试与 R8 构建分开执行；发布前仍需真实书籍与真机兼容性验收。
+完整归属和版本见 [NOTICE](NOTICE) 与 [第三方清单](docs/THIRD_PARTY.md)；原文许可证保存在 [应用资产](app/src/main/assets/licenses)，设置页也可查看。感谢 AndroidX、Jetpack Compose、Material Components、Kotlin、jsoup、PdfBox-Android、Tesseract4Android、pdf-craft 和 epub-generator 等项目。ReadX 不是这些项目的官方产品，也不暗示其作者对本项目提供背书。

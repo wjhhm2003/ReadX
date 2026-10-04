@@ -54,6 +54,7 @@ Set-Location E:\ReadX
 ```
 
 - 使用项目 `gradlew.bat`，不要依赖全局 Gradle。
+- 公开仓库为 `wjhhm2003/ReadX`；项目原创代码 MIT，第三方保留原许可。普通版默认不内置模型，内置版显式使用 `-PbundledOcr=true`，二者同包名。模型仅由固定清单/哈希准备，禁止将模型二进制、私人书籍、密钥、本机配置或诊断目录加入 Git。
 - `local.properties` 是本机配置，不提交。Windows 属性路径必须正确转义；示例：`sdk.dir=E\:/Android/Sdk`。
 - 不擅自搬动或清空 Android SDK、AVD、Gradle 缓存和 Studio 配置。
 - 不在工程中保存签名密钥、API 密钥、账号凭据或用户私人书籍。
