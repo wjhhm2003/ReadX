@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/readx-icon.svg" alt="ReadX application icon" width="96" height="96" />
+</p>
+
 <h1 align="center">ReadX</h1>
 
 **一款离线的 Android 本地阅读器。** 支持 EPUB、TXT、PDF；原生 Kotlin + Jetpack Compose + Material 3 Expressive，无账号、无广告、无网络权限。
