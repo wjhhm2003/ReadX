@@ -40,19 +40,11 @@ EPUB 自研适配器是基础实现，不是完整 EPUB 标准引擎。引入 Re
 
 ## Expressive 与依赖版本
 
-MaterialExpressiveTheme 来自固定的 Material 3 1.5.0-alpha01。该 API 为公开实验接口，不能把它宣传为全部稳定组件。Compose BOM 固定 2026.01.00，以匹配当前 SDK；不会为了追新自动升级到要求 SDK 37 的依赖。
+MaterialExpressiveTheme 来自固定的 Material 3 1.5.0-alpha01。该 API 为公开实验接口。Compose BOM 固定 2026.01.00，以匹配当前 SDK。
 
 PDF Fragment 原生 View 层需要 Material 属性，所以 Activity 的 XML 主题继承 Theme.Material3.DayNight.NoActionBar；Compose 使用独立的 ReadXTheme。
 
 Preview 构建启用 R8 与资源压缩，并以本机 Android 调试密钥签名，适合个人开发预览，不是正式发行签名。Release 构建不内置签名密钥。
-
-## 明确不做的过早承诺
-
-- 基础滚动位置 ≠ 精确文字锚点。
-- beta PDF 查看器集成 ≠ 优秀 PDF 支持已全面验收。
-- EPUB 标题解析 ≠ 自动生成完整多级目录。
-- 暖色主题 ≠ 医学意义上的护眼效果。
-- API 36 模拟器通过 ≠ 已验证所有 Android 9+ 设备。
 
 ## 首页约定
 
@@ -194,11 +186,3 @@ PDF Activity 的原生根布局独占 systemBars/displayCutout/IME 安全区；�
 - `SystemNavigationProtection` 只在系统手势带画同色背景，不添加 padding；正文工具栏展开时通过回调选择 surfaceContainerHigh，隐藏时选择纸张色。因此显隐不改变 WebView 高度，也不触发分页。
 - PDF 的原生根布局继续唯一负责 systemBars/cutout/IME padding。根布局 dispatchDraw 只补画已保留的 navigationBars 底色；Compose 不再次消费 PDF 系统边距。旧系统导航栏颜色由同一显示层同步，Theme 仅管理系统栏明暗图标。
 - 设备回归确认程序关闭阅读后，销毁中的 WebView 可返回已偏移的 scrollX（目标第3页，后续旧回调曾覆盖为第2页）。`LibraryViewModel.close` 在移除 session 前持久化最后一次有效进度；关闭后不再接受旧 view 的 final 覆盖。UI 退出先结束翻页动画并 report；仍保留活动 session 的生命周期最终落盘，数据库与位置语义不变。
-
-
-## 公开仓库与可选内置 OCR 构建（2026-10-04）
-
-- 将已交付的内置三模型变体从临时工作树整理为 `-PbundledOcr=true`。默认 false，普通版不打包/部署模型，仍支持 SAF 导入；两种包均为 `io.readx.app`，Room v5 不变。版本分别 0.5.0-preview / 0.5.0-ocr-preview，同一构建者的调试签名，不能同时安装。
-- `app/src/ocrBundled/assets/ocr/manifest.json` 固定官方提交与三份模型大小/SHA-256；PowerShell/Python 准备脚本显式下载或从本地目录复制，Gradle preBuild 校验缺失/损坏，应用首次后台原子部署、Tesseract 初始化与状态/重试。正常用户自选的可用模型不覆盖；转换/续算前先保证部署完成，避免配置指纹遗漏模型。
-- 模型二进制、用户书籍、密钥、local.properties、构建和诊断目录不进入 Git 历史；APK 通过 Releases 发布。对大型模型仅保存清单/许可和获取脚本。开发电脑可联网准备资源，不赋予应用 INTERNET 权限。
-- 用户确认项目原创代码采用 MIT，并新建公开 wjhhm2003/ReadX 仓库。上游版权/许可及适配范围独立保留；补齐 Tesseract native、PDFBox 的加密和字体资源声明，设置页枚举并离线显示全部 .txt 许可证/NOTICE，不只列出最初四个库。
