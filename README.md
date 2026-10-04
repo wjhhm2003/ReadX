@@ -1,14 +1,12 @@
 # ReadX
 
-**中文优先、离线可用的 Android 本地阅读器。** 支持 EPUB、TXT、PDF；原生 Kotlin + Jetpack Compose + Material 3 Expressive，无账号、无广告、无网络权限。
+**一款离线的 Android 本地阅读器。** 支持 EPUB、TXT、PDF；原生 Kotlin + Jetpack Compose + Material 3 Expressive，无账号、无广告、无网络权限。
 
-[下载预览版](https://github.com/wjhhm2003/ReadX/releases) · [开发路线](docs/ROADMAP.md) · [验证记录](docs/TESTING.md) · [第三方声明](docs/THIRD_PARTY.md) · [MIT 许可证](LICENSE)
+[下载预览版](https://github.com/wjhhm2003/ReadX/releases)  [第三方声明](docs/THIRD_PARTY.md) [MIT 许可证](LICENSE)
 
-> 当前为 **0.5.0 开发预览**，不是全部需求已完成的正式发行版。Material 3 Expressive 与 AndroidX PDF 使用实验/预发布 API。首次打开大书的分页统计、PDF 兼容性和 OCR 质量仍有边界。
+Material 3 Expressive 与 AndroidX PDF 使用实验/预发布 API。
 
-![ReadX 真实运行界面：自生成测试样书](docs/screenshots/md3-overview.png)
-
-截图来自专用模拟器上的真实运行，使用自生成测试样书，不是设计稿或用户私人书籍。
+![ReadX 运行界面](docs/screenshots/md3-overview.png)
 
 ## 功能
 
@@ -28,8 +26,8 @@
 
 | 预览包 | OCR 模型 | 适用情况 |
 | --- | --- | --- |
-| 普通版 `readx-0.5.0-preview.apk` | 不内置；从本地导入 | 希望安装包较小，或自行选择模型 |
-| 内置版 `readx-0.5.0-ocr-preview.apk` | 简中 `chi_sim`、繁中 `chi_tra`、英文 `eng` | 希望安装后离线可用，不手动准备模型 |
+| 普通版 `readx-0.5.0-preview.apk` | 不内置；从本地导入 | 安装包较小，自行选择模型 |
+| 内置版 `readx-0.5.0-ocr-preview.apk` | 简中 `chi_sim`、繁中 `chi_tra`、英文 `eng` | 安装后离线可用，手动准备模型 |
 
 **两版 applicationId 都是 `io.readx.app`，不能并存，安装会更新替换同一应用。** 本仓库的个人 Preview 使用本机调试密钥，不是正式发行签名；自己构建可能使用不同密钥，不能保证覆盖安装他人的 APK。请先导出需要保留的原书和转换版，**不要通过卸载/清空应用解决签名冲突**。
 
@@ -42,7 +40,7 @@
 3. 点开 PDF，观察实际原文页数进度。缺模型时任务等待，导入后点击“继续 / 重试”；可先读原 PDF。
 4. 完成后打开独立转换版，使用现有 EPUB 排版/搜索/批注；进度面板可 **查看原 PDF / 导出 EPUB**。
 
-复杂或不可靠内容保留原图，未获得可重排正文则明确失败。原 PDF 与转换版的进度、页码和批注独立；PDF 页坐标标记不自动变成文字标记。密码 PDF 首版不转换；原版查看器仍按系统支持处理。后台任务可能受系统配额、电量和进程限制中断，不承诺永久后台运行。
+复杂或不可靠内容保留原图，未获得可重排正文则明确失败。原 PDF 与转换版的进度、页码和批注独立；PDF 页坐标标记不自动变成文字标记。密码 PDF 首版不转换；原版查看器仍按系统支持处理。后台任务可能受系统配额、电量和进程限制中断。
 
 ## 隐私与数据
 
@@ -127,4 +125,4 @@ adb devices
 
 ReadX 原创代码采用 **[MIT License](LICENSE)**，版权所有 © 2026 wjhhm2003 及贡献者。第三方代码、适配片段、字体资源与模型**不因项目采用 MIT 而改为 MIT**，仍遵循各自条款。
 
-完整归属和版本见 [NOTICE](NOTICE) 与 [第三方清单](docs/THIRD_PARTY.md)；原文许可证保存在 [应用资产](app/src/main/assets/licenses)，设置页也可查看。感谢 AndroidX、Jetpack Compose、Material Components、Kotlin、jsoup、PdfBox-Android、Tesseract4Android、pdf-craft 和 epub-generator 等项目。ReadX 不是这些项目的官方产品，也不暗示其作者对本项目提供背书。
+完整归属和版本见 [NOTICE](NOTICE) 与 [第三方清单](docs/THIRD_PARTY.md)；原文许可证保存在 [应用资产](app/src/main/assets/licenses)，设置页也可查看。感谢 AndroidX、Jetpack Compose、Material Components、Kotlin、jsoup、PdfBox-Android、Tesseract4Android、pdf-craft 和 epub-generator 等项目。
