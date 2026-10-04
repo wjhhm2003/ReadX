@@ -155,10 +155,22 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                 Box(Modifier.fillMaxSize().testTag("pdf-page-$page").onSizeChanged {size=it}.transformable(transform,canPan={zoom>1f})
                     .pointerInput(page,fit,zoom,pan,annotations) {
                         detectTapGestures(onTap={where->
-                            val point=toPdf(where);val nx=point.x/image.width;val ny=point.y/image.height
-                            val found=annotations.filter {a->PdfLocators.decode(a.locator).any {it.page==page && nx in it.left..it.right && ny in it.top..it.bottom}}
-                            if(found.isNotEmpty()) {val newest=found.maxBy {maxOf(it.updatedAt,it.createdAt)};onSelection(PdfSelection(newest.quote,PdfLocators.decode(newest.locator),found.map {it.id}))}
-                            else if(where.x in size.width/3f..size.width*2/3f) onTapPage()
+                            val direction = when {
+                                where.x < size.width / 3f -> -1
+                                where.x >= size.width * 2 / 3f -> 1
+                                else -> 0
+                            }
+                            if (direction != 0) {
+                                if (!pager.isScrollInProgress) {
+                                    val target = (pager.currentPage + direction).coerceIn(0, count - 1)
+                                    if (target != pager.currentPage) scope.launch { pager.animateScrollToPage(target) }
+                                }
+                            } else {
+                                val point=toPdf(where);val nx=point.x/image.width;val ny=point.y/image.height
+                                val found=annotations.filter {a->PdfLocators.decode(a.locator).any {it.page==page && nx in it.left..it.right && ny in it.top..it.bottom}}
+                                if(found.isNotEmpty()) {val newest=found.maxBy {maxOf(it.updatedAt,it.createdAt)};onSelection(PdfSelection(newest.quote,PdfLocators.decode(newest.locator),found.map {it.id}))}
+                                else onTapPage()
+                            }
                         })
                     }
                     .pointerInput(page,fit,zoom,pan,document,native) {

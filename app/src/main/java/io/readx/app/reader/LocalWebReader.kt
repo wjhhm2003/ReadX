@@ -77,11 +77,24 @@ class LocalWebReader(context: Context) : WebView(context) {
             callback(value?.let(TextAnchor::parse))
         }
     }
-    fun navigateAnchor(anchor: TextAnchor, finished: (Boolean) -> Unit = {}) {
+    fun captureViewportAnchor(callback: (TextAnchor?) -> Unit) {
+        val generation = loadGeneration
+        // Native scrollTo may precede Chromium's DOM viewport update; never capture the previous page.
+        postVisualStateCallback(generation, object : VisualStateCallback() {
+            override fun onComplete(requestId: Long) {
+                if (isCurrentLoad(generation)) readAnchor("window.ReadX.viewportAnchor()", callback)
+            }
+        })
+    }
+    fun navigateAnchor(anchor: TextAnchor, restoringPosition: Boolean = false, finished: (Boolean) -> Unit = {}) {
         trusted("JSON.stringify(window.ReadX.navigate(${anchor.json()},$paged))") { result ->
             val value = runCatching { JSONObject(JSONTokener(result).nextValue() as String) }.getOrNull()
             val found = value?.optBoolean("found") == true
-            if (found && paged) jumpToPage(value!!.optInt("page", 1))
+            if (found && paged) {
+                val page = value!!.optInt("page", 1)
+                if (restoringPosition) { finishTransition(); scrollTo((page.coerceIn(1, pageInfo().second) - 1) * width, 0) }
+                else jumpToPage(page)
+            }
             if (found) report()
             finished(found)
         }
@@ -122,6 +135,8 @@ class LocalWebReader(context: Context) : WebView(context) {
     }
     var paged = true
     var restoring = true
+    internal var pendingReflowAnchor: TextAnchor? = null
+    internal var pendingRestoreFraction: Float? = null
     var loadGeneration = 0L
     @Volatile var viewportWidthCss = 360f
     @Volatile var viewportHeightCss = 640f
@@ -138,6 +153,44 @@ class LocalWebReader(context: Context) : WebView(context) {
     val isTurning get() = pageAnimator != null
     private var destinationX = 0
     fun isCurrentLoad(generation: Long) = !released && loadGeneration == generation
+    private var cancelPendingLayout: (() -> Unit)? = null
+    fun cancelLayoutCheck() { cancelPendingLayout?.invoke(); cancelPendingLayout = null }
+
+    /** No minimum wall-clock sleep: resources + consecutive frames + Chromium visual commit. */
+    fun whenLayoutStable(generation: Long, ready: () -> Unit, failed: (String) -> Unit) {
+        cancelLayoutCheck()
+        var cancelled = false
+        var lastRange = -1
+        var lastHeight = -1
+        var stableFrames = 0
+        lateinit var check: Runnable
+        lateinit var timeout: Runnable
+        fun active() = !cancelled && isCurrentLoad(generation)
+        fun cancel() { cancelled = true; removeCallbacks(check); removeCallbacks(timeout) }
+        timeout = Runnable { if (active()) { cancel(); failed("章节排版未能在限时内稳定") } }
+        check = Runnable {
+            if (!active()) return@Runnable
+            trusted("document.body && document.body.getAttribute('data-readx-load') === '$generation' && document.readyState === 'complete' && (!document.fonts || document.fonts.status === 'loaded') && Array.from(document.images).every(i => i.complete)") { value ->
+                if (!active()) return@trusted
+                val range = horizontalRange()
+                val height = contentHeight
+                stableFrames = if (value == "true" && range == lastRange && height == lastHeight && height > 0) stableFrames + 1 else 0
+                lastRange = range; lastHeight = height
+                if (stableFrames >= 2) {
+                    postVisualStateCallback(generation, object : VisualStateCallback() {
+                        override fun onComplete(requestId: Long) {
+                            if (!active()) return
+                            if (horizontalRange() == range && contentHeight == height) { cancel(); ready() }
+                            else { stableFrames = 0; postOnAnimation(check) }
+                        }
+                    })
+                } else postOnAnimation(check)
+            }
+        }
+        cancelPendingLayout = ::cancel
+        postDelayed(timeout, 8_000)
+        postOnAnimation(check)
+    }
     fun horizontalRange(): Int = computeHorizontalScrollRange()
     fun pageInfo(): Pair<Int, Int> {
         if (!paged || width <= 0) return 1 to 1
@@ -315,6 +368,7 @@ class LocalWebReader(context: Context) : WebView(context) {
         if (released) return
         finishTransition()
         windowActionMode?.finish();windowActionMode=null;selectionActive=false
+        cancelLayoutCheck()
         released = true; loadGeneration++
         reportPosition = null; boundary = null; resized = null; tapZone=null; annotationSelected=null;selectionPopup=null
         stopLoading(); webViewClient = WebViewClient(); destroy()
@@ -322,7 +376,7 @@ class LocalWebReader(context: Context) : WebView(context) {
 }
 
 object LocalHtml {
-    fun prepare(source: String, settings: ReaderSettings, foreground: String, background: String, viewportWidth: Float = 360f, viewportHeight: Float = 640f): String {
+    fun prepare(source: String, settings: ReaderSettings, foreground: String, background: String, viewportWidth: Float = 360f, viewportHeight: Float = 640f, loadGeneration: Long? = null): String {
         // Preserve measured fractional CSS pixels: initial-scale=1 follows the native density,
         // while viewport meta dimensions are integral. Rounding column widths accumulates drift in long chapters.
         val pageWidth = viewportWidth.coerceAtLeast(1f)
@@ -336,6 +390,7 @@ object LocalHtml {
                 if (name.startsWith("on") || name.startsWith("data-readx-") || name == "srcdoc" || ((name == "href" || name == "src" || name == "xlink:href") && (value.startsWith("javascript:") || value.startsWith("file:") || value.startsWith("content:")))) element.removeAttr(attr.key)
             }
         }
+        loadGeneration?.let { document.body().attr("data-readx-load", it.toString()) }
         document.select("body style").forEach { it.remove(); document.head().appendChild(it) }
         document.head().prependElement("meta").attr("http-equiv", "Content-Security-Policy").attr("content", "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'none'; connect-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'")
         document.select("meta[name=viewport]").remove()
@@ -367,6 +422,7 @@ fun WebReader(
     onViewport: (Int, Int) -> Unit, annotations: List<Annotation>, onTapZone: (Int) -> Unit, onSelection: (ReaderSelection?) -> Unit, onAnnotation: (String, TextAnchor) -> Unit,
     onPosition: (Float, Boolean, Int, Int) -> Unit,
     notify: (String) -> Unit, controller: ReaderController,
+    onReady: (Int) -> Unit = {},
 ) {
     val chapter = session.chapters[session.chapter]
     key(session.book.id, session.navigationId, session.chapter, session.target, session.find, session.occurrence) {
@@ -380,6 +436,7 @@ fun WebReader(
         val currentAnnotation by rememberUpdatedState(onAnnotation)
         val currentSelection by rememberUpdatedState(onSelection)
         val currentViewport by rememberUpdatedState(onViewport)
+        val currentReady by rememberUpdatedState(onReady)
         AndroidView(modifier = modifier,
             factory = { context ->
                 LocalWebReader(context).apply {
@@ -406,14 +463,16 @@ fun WebReader(
                 val signature = listOf(settings.layout, settings.fontSize, settings.lineHeight, settings.margin, settings.serif, foreground, background, chapter.href, session.navigationId, fontScale)
                 if (view.tag != signature) {
                     view.finishTransition()
-                    var restore = if (view.tag == null) session.fraction else view.fraction()
+                    val reflowing = view.tag != null
+                    val wasRestoring = view.restoring
+                    var reflowAnchor: TextAnchor? = if (wasRestoring) view.pendingReflowAnchor else null
+                    var restore = if (!reflowing) session.fraction else if (wasRestoring) view.pendingRestoreFraction ?: view.fraction() else view.fraction()
                     var target = if (view.tag == null) session.target else null
                     var handled = false
+                    val issuedGeneration = java.util.concurrent.atomic.AtomicLong(-1)
                     var loadedUrl = ""
                     view.tag = signature
-                    view.paged = settings.layout == io.readx.app.ui.ReadingLayout.PAGED
                     view.restoring = true
-                    view.settings.textZoom = (fontScale * 100).toInt().coerceAtLeast(1)
                     view.setBackgroundColor(Color.parseColor(background))
                     controller.view = view
                     view.reportPosition = { fraction, current, total -> currentPosition(fraction, false, current, total) }
@@ -427,11 +486,32 @@ fun WebReader(
                     view.resized = { fraction ->
                         currentViewport(view.width, view.height)
                         view.finishTransition(); restore = fraction; target = null; handled = false
-                        view.restoring = true; view.loadGeneration++; loadedUrl = baseUrl
-                        view.loadUrl(baseUrl)
+                        view.restoring = true
+                        view.captureViewportAnchor { anchor ->
+                            if (view.tag == signature) {
+                                reflowAnchor = anchor
+                                view.pendingReflowAnchor = anchor; view.pendingRestoreFraction = restore
+                                view.cancelLayoutCheck(); view.loadGeneration++; issuedGeneration.set(view.loadGeneration); handled = false; loadedUrl = baseUrl
+                                view.scrollTo(0, 0)
+                                view.loadUrl(baseUrl)
+                            }
+                        }
                     }
                     val content = repository.content(session.book.id)
                     view.webViewClient = object : WebViewClient() {
+                        private fun mainFrameFailure(message: String) {
+                            if (view.tag != signature || issuedGeneration.get() != view.loadGeneration) return
+                            handled = true
+                            view.cancelLayoutCheck()
+                            view.alpha = 1f
+                            currentNotify(message)
+                        }
+                        override fun onReceivedError(webView: WebView, request: WebResourceRequest, error: WebResourceError) {
+                            if (request.isForMainFrame) mainFrameFailure("章节加载失败，请返回后重试")
+                        }
+                        override fun onReceivedHttpError(webView: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                            if (request.isForMainFrame) mainFrameFailure("章节资源读取失败，请返回后重试")
+                        }
                         override fun shouldInterceptRequest(webView: WebView, request: WebResourceRequest): WebResourceResponse {
                             val uri = request.url
                             if (uri.scheme != "https" || uri.host != "appassets.androidplatform.net" || !uri.path.orEmpty().startsWith("/content/")) return blocked()
@@ -441,7 +521,7 @@ fun WebReader(
                                 if (!file.isFile) return blocked()
                                 val ext = file.extension.lowercase()
                                 val mime = when(ext) { "html", "htm", "xhtml" -> "text/html"; "css" -> "text/css"; "svg" -> "image/svg+xml"; else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream" }
-                                val stream = if (mime == "text/html") ByteArrayInputStream(LocalHtml.prepare(file.readText(), settings, foreground, background, view.viewportWidthCss, view.viewportHeightCss).toByteArray()) else file.inputStream()
+                                val stream = if (mime == "text/html") ByteArrayInputStream(LocalHtml.prepare(file.readText(), settings, foreground, background, view.viewportWidthCss, view.viewportHeightCss, issuedGeneration.get()).toByteArray()) else file.inputStream()
                                 WebResourceResponse(mime, if (mime.startsWith("text/")) "UTF-8" else null, stream)
                             } catch (_: Exception) { blocked() }
                         }
@@ -470,7 +550,7 @@ fun WebReader(
                             }
                         }
                         override fun onPageFinished(webView: WebView, url: String) {
-                            if (view.tag != signature || handled || !view.isCurrentLoad(view.loadGeneration)) return
+                            if (view.tag != signature || handled || issuedGeneration.get() != view.loadGeneration || !view.isCurrentLoad(view.loadGeneration)) return
                             handled = true
                             val generation = view.loadGeneration
                             fun active() = view.tag == signature && view.isCurrentLoad(generation)
@@ -479,16 +559,38 @@ fun WebReader(
                                 // Fragment navigation must remain at its target. Never restore the source fraction afterwards.
                                 if (target == "__readx_end__") view.restore(1f)
                                 else if (target != null) view.snap()
-                                else view.restore(restore)
-                                view.restoring = false
+                                else if (reflowAnchor == null && session.anchor == null) view.restore(restore)
                                 view.initializeTrusted {
+                                    if (!active()) return@initializeTrusted
                                     view.applyAnnotations(currentAnnotations) {
-                                        if (session.anchor != null) view.navigateAnchor(session.anchor) { found -> if (!found) currentNotify("批注文字未能唯一定位，已回到原章节位置") }
-                                        view.report()
+                                        if (!active()) return@applyAnnotations
+                                        fun commit() {
+                                            view.postVisualStateCallback(generation, object : WebView.VisualStateCallback() {
+                                                override fun onComplete(requestId: Long) {
+                                                    if (!active()) return
+                                                    view.restoring = false
+                                                    view.pendingReflowAnchor = null; view.pendingRestoreFraction = null
+                                                    view.report()
+                                                    // The visible viewport is committed before any full-book work starts.
+                                                    view.alpha = 1f
+                                                    currentReady(view.pageInfo().second)
+                                                }
+                                            })
+                                        }
+                                        val anchor = reflowAnchor ?: session.anchor
+                                        if (anchor != null) {
+                                            // navigateAnchor uses the existing validated UTF-16 locator; position is not a page fraction.
+                                            view.navigateAnchor(anchor, restoringPosition = true) { found ->
+                                                if (!active()) return@navigateAnchor
+                                                if (!found) {
+                                                    view.restore(restore)
+                                                    if (session.anchor != null) currentNotify("批注文字未能唯一定位，已回到原章节位置")
+                                                }
+                                                commit()
+                                            }
+                                        } else commit()
                                     }
                                 }
-                                view.alpha = if (ValueAnimator.areAnimatorsEnabled()) 0f else 1f
-                                view.animate().alpha(1f).setDuration(140).start()
                                 if (session.find != null) {
                                     var found = false
                                     view.setFindListener { _, count, done ->
@@ -505,35 +607,40 @@ fun WebReader(
                                     view.findAllAsync(session.find)
                                 }
                             }
-                            var lastRange = -1
-                            var stableFrames = 0
-                            var checks = 0
-                            fun waitForLayout() {
-                                if (!active()) return
-                                val range = view.horizontalRange()
-                                stableFrames = if (range == lastRange) stableFrames + 1 else 0
-                                lastRange = range; checks++
-                                if ((checks >= 6 && stableFrames >= 3 && view.contentHeight > 0) || checks >= 20) {
-                                    view.postVisualStateCallback(System.nanoTime(), object : WebView.VisualStateCallback() {
-                                        override fun onComplete(requestId: Long) { if (active()) restorePosition() }
-                                    })
-                                } else view.postDelayed({ waitForLayout() }, 60)
+                            view.whenLayoutStable(generation, ::restorePosition) { message ->
+                                if (active()) {
+                                    // Show the content and an explicit error, but never publish an unstable exact count.
+                                    view.alpha = 1f
+                                    currentNotify(message)
+                                }
                             }
-                            view.postDelayed({ waitForLayout() }, 60)
                         }
                     }
-                    // HTML pagination is derived only from the measured reading viewport.
-                    view.doOnLayout {
-                        if (view.tag == signature && view.isCurrentLoad(view.loadGeneration)) {
-                            currentViewport(view.width,view.height)
-                            view.stopLoading(); view.loadGeneration++
+                    fun loadMeasured() {
+                        if (view.tag != signature || !view.isCurrentLoad(view.loadGeneration)) return
+                        // HTML pagination is derived only from the measured reading viewport.
+                        view.doOnLayout {
+                            if (view.tag != signature || !view.isCurrentLoad(view.loadGeneration)) return@doOnLayout
+                            currentViewport(view.width, view.height)
+                            view.cancelLayoutCheck(); view.stopLoading(); view.loadGeneration++
+                            issuedGeneration.set(view.loadGeneration); handled = false
+                            view.pendingReflowAnchor = reflowAnchor; view.pendingRestoreFraction = restore
+                            view.paged = settings.layout == io.readx.app.ui.ReadingLayout.PAGED
+                            view.settings.textZoom = (fontScale * 100).toInt().coerceAtLeast(1)
                             view.viewportWidthCss = view.width / view.resources.displayMetrics.density
                             view.viewportHeightCss = view.height / view.resources.displayMetrics.density
                             val url = baseUrl + (target?.takeUnless { it == "__readx_end__" }?.let { "#" + Uri.encode(it) } ?: "")
                             loadedUrl = url
+                            view.scrollTo(0, 0)
                             view.loadUrl(url)
                         }
                     }
+                    if (reflowing && !wasRestoring) {
+                        // Capture the old DOM before loading a different layout. Old callbacks are generation-guarded.
+                        view.captureViewportAnchor { anchor ->
+                            if (view.tag == signature) { reflowAnchor = anchor; loadMeasured() }
+                        }
+                    } else loadMeasured()
                 }
             },
             onRelease = { view ->

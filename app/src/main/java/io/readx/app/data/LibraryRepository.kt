@@ -52,7 +52,7 @@ class LibraryRepository(private val context: Context, private val db: LibraryDat
         context.assets.open("welcome.txt").use { ingest("欢迎使用 ReadX.txt", it) }
     }
 
-    private suspend fun ingest(name: String, input: InputStream): Book = importLock.withLock {
+    private suspend fun ingest(name: String, input: InputStream, conversionId: String? = null, conversionRunId: String? = null): Book = importLock.withLock {
         val extension = name.substringAfterLast('.', "").lowercase()
         require(extension in setOf("epub", "txt", "pdf")) { "请选择 EPUB、TXT 或 PDF 文件" }
         val id = UUID.randomUUID().toString()
@@ -74,7 +74,14 @@ class LibraryRepository(private val context: Context, private val db: LibraryDat
                 require(bytes > 0) { "文件为空" }
             }
             val hash = digest.digest().joinToString("") { "%02x".format(it) }
-            dao.byFingerprint(hash)?.let { existing -> directory.deleteRecursively(); return@withLock existing }
+            dao.byFingerprint(hash)?.let { existing ->
+                if(conversionId!=null) db.withTransaction {
+                    val task=db.conversions().get(conversionId)
+                    if(task?.runId!=conversionRunId || task?.stage!="IMPORTING") throw kotlinx.coroutines.CancellationException()
+                    db.conversions().complete(conversionId,existing.id)
+                }
+                directory.deleteRecursively(); return@withLock existing
+            }
             val parsed = when (extension) {
                 "txt" -> BookParser.txt(file, content(id))
                 "epub" -> BookParser.epub(file, content(id))
@@ -89,16 +96,25 @@ class LibraryRepository(private val context: Context, private val db: LibraryDat
                 parsed?.author.orEmpty(), extension.uppercase(), name, coverPath = parsed?.cover, totalUnits = parsed?.chapters?.size ?: 0)
             coroutineContext.ensureActive()
             db.withTransaction {
+                if(conversionId!=null) {
+                    val task=db.conversions().get(conversionId)
+                    if(task?.runId!=conversionRunId || task?.stage!="IMPORTING") throw kotlinx.coroutines.CancellationException()
+                }
                 dao.insertBook(book)
                 dao.insertChapters(parsed?.chapters?.mapIndexed { index, chapter ->
                     Chapter(id, index, chapter.title, chapter.href, chapter.text)
                 }.orEmpty())
+                if(conversionId!=null) db.conversions().complete(conversionId,book.id)
             }
             book
         } catch (error: Throwable) {
             directory.deleteRecursively()
             throw error
         }
+    }
+
+    suspend fun publishConvertedEpub(file: File, conversionId: String, runId: String): Book = withContext(Dispatchers.IO) {
+        file.inputStream().use { ingest("转换版.epub",it,conversionId,runId) }
     }
 
     suspend fun cover(book: Book): Bitmap? = withContext(Dispatchers.IO) {
@@ -137,6 +153,7 @@ class LibraryRepository(private val context: Context, private val db: LibraryDat
     }
 
     suspend fun delete(book: Book) = withContext(Dispatchers.IO) {
+        if(book.format=="PDF") (context.applicationContext as io.readx.app.ReadXApplication).conversions.stopSource(book.id)
         importLock.withLock { dao.delete(book.id); directory(book.id).deleteRecursively() }
     }
 }

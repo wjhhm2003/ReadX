@@ -10,8 +10,8 @@ android {
         applicationId = "io.readx.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.1"
+        versionCode = 9
+        versionName = "0.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -56,6 +56,9 @@ dependencies {
     implementation("androidx.pdf:pdf-viewer-fragment:1.0.0-beta01")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jsoup:jsoup:1.21.2")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation(platform("androidx.compose:compose-bom:2026.01.00"))
     androidTestImplementation("androidx.test:runner:1.7.0")

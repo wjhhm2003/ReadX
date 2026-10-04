@@ -79,11 +79,16 @@ class ImmersiveReaderInstrumentedTest {
                 val stamp=SystemClock.uptimeMillis();for(action in listOf(MotionEvent.ACTION_DOWN,MotionEvent.ACTION_UP)) {val event=MotionEvent.obtain(stamp,SystemClock.uptimeMillis(),action,bx,by,0);instrumentation.sendPointerSync(event);event.recycle()}
                 compose.waitUntil(8000) {compose.onAllNodesWithText("取消标记").fetchSemanticsNodes().isNotEmpty()};compose.onNodeWithText("取消标记").performClick()
                 compose.waitUntil(8000) {runBlocking {app.repository.dao.annotations(book.id).none {it.kind=="HIGHLIGHT"}}}
-                compose.onNodeWithTag("reader-content").performTouchInput {click(center)};compose.onNodeWithContentDescription("返回书架").performClick()
+                if(compose.onAllNodesWithContentDescription("返回书架").fetchSemanticsNodes().isEmpty()) {
+                    compose.onNodeWithTag("reader-content").performTouchInput {click(center)}
+                }
+                compose.waitUntil(5000) {compose.onAllNodesWithContentDescription("返回书架").fetchSemanticsNodes().isNotEmpty()}
+                compose.onNodeWithContentDescription("返回书架").performClick()
                 compose.onNode(hasText("设置") and hasClickAction()).performClick();compose.onNodeWithText("紫色").performClick()
-                compose.onNodeWithText("强调色 #7756AE").assertIsDisplayed()
+                val purple = io.readx.app.ui.accentScheme(io.readx.app.ui.ThemeAccent.PURPLE,"",false).primary.toArgb() and 0xFFFFFF
+                compose.onNodeWithText("强调色 #${"%06X".format(purple)}").assertIsDisplayed()
                 if(android.os.Build.VERSION.SDK_INT>=31) {
-                    compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Role,Role.Switch)).performClick()
+                    compose.onNodeWithTag("dynamic-colors-switch").performClick()
                     val color=androidx.compose.material3.dynamicLightColorScheme(app).primary.toArgb() and 0xFFFFFF
                     compose.onNodeWithText("强调色 #${"%06X".format(color)}").assertIsDisplayed()
                 }

@@ -28,7 +28,7 @@ class ThemeSettingsInstrumentedTest {
                 compose.onNodeWithText("应用主题").assertIsDisplayed()
                 compose.onNodeWithText("紫色").performClick()
                 assertEquals(ThemeAccent.PURPLE,ReaderPreferences(app).settings.value.accent)
-                compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Role,Role.Switch)).performClick()
+                compose.onNodeWithTag("dynamic-colors-switch").performClick()
                 assertTrue(ReaderPreferences(app).settings.value.dynamicColors)
                 compose.onNodeWithText("蓝色").assertIsNotEnabled()
                 TestScreenshots.capture("theme-030-settings")

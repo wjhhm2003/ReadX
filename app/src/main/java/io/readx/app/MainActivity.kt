@@ -27,9 +27,11 @@ class MainActivity : ComponentActivity() {
         readerView()?.unbindWindowActionMode(mode)
         super.onActionModeFinished(mode)
     }
+    override fun onNewIntent(intent: android.content.Intent) { super.onNewIntent(intent);intent.getStringExtra("conversionId")?.let(model::showConversion) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        intent.getStringExtra("conversionId")?.let(model::showConversion)
         setContent { ReadXApp(model) }
     }
 }

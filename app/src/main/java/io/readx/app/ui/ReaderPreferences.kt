@@ -18,6 +18,8 @@ data class ReaderSettings(
     val dynamicColors: Boolean = false,
     val customAccent: String = "",
     val annotationColor: String = "#FFD240",
+    val pdfToEpubEnabled: Boolean = false,
+    val ocrLanguages: String = "chi_sim+eng",
     val pdfLayout: PdfReadingLayout = PdfReadingLayout.VERTICAL,
     val theme: ReadingTheme = ReadingTheme.SYSTEM,
     val layout: ReadingLayout = ReadingLayout.PAGED,
@@ -34,6 +36,8 @@ class ReaderPreferences(context: Context) {
         dynamicColors = prefs.getBoolean("dynamicColors", false),
         customAccent = prefs.getString("customAccent", "").orEmpty().takeIf {it.matches(Regex("#[0-9A-Fa-f]{6}"))}.orEmpty(),
         annotationColor = io.readx.app.data.MarkColor.normalize(prefs.getString("annotationColor", "#FFD240").orEmpty()),
+        pdfToEpubEnabled = prefs.getBoolean("pdfToEpubEnabled", false),
+        ocrLanguages = prefs.getString("ocrLanguages","chi_sim+eng").orEmpty().takeIf {it in listOf("chi_sim+eng","chi_tra+eng","eng")} ?: "chi_sim+eng",
         pdfLayout = PdfReadingLayout.entries.firstOrNull { it.name == prefs.getString("pdfLayout", "VERTICAL") } ?: PdfReadingLayout.VERTICAL,
         theme = ReadingTheme.entries.firstOrNull { it.name == prefs.getString("theme", "SYSTEM") } ?: ReadingTheme.SYSTEM,
         layout = ReadingLayout.entries.firstOrNull { it.name == prefs.getString("layout", "PAGED") } ?: ReadingLayout.PAGED,
@@ -52,7 +56,7 @@ class ReaderPreferences(context: Context) {
 
     fun update(value: ReaderSettings) {
         state.value = value
-        prefs.edit().putString("accent", value.accent.name).putBoolean("dynamicColors", value.dynamicColors)
+        prefs.edit().putBoolean("pdfToEpubEnabled", value.pdfToEpubEnabled).putString("ocrLanguages",value.ocrLanguages).putString("accent", value.accent.name).putBoolean("dynamicColors", value.dynamicColors)
             .putString("customAccent",value.customAccent).putString("annotationColor",value.annotationColor)
             .putString("pdfLayout", value.pdfLayout.name).putString("theme", value.theme.name).putString("layout", value.layout.name)
             .putFloat("fontSize", value.fontSize).putFloat("lineHeight", value.lineHeight)

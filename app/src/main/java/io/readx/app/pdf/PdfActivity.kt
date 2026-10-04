@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.os.ext.SdkExtensions
 import android.util.SparseArray
 import android.view.View
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.widget.LinearLayout
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
@@ -55,6 +57,7 @@ import androidx.pdf.view.PdfView
 import androidx.pdf.viewer.fragment.PdfViewerFragment
 import io.readx.app.ReadXApplication
 import io.readx.app.data.Book
+import io.readx.app.ui.ReadXDesign
 import io.readx.app.ui.ReadXTheme
 import io.readx.app.ui.ReaderPreferences
 import kotlinx.coroutines.*
@@ -86,25 +89,43 @@ class PdfActivity : AppCompatActivity() {
         requestedPage=if(intent.hasExtra("page")) intent.getIntExtra("page",0) else null
         val forceBasic=io.readx.app.BuildConfig.DEBUG && intent.getBooleanExtra("forceBasicForTest",false)
         val supportsAdvanced=!forceBasic && Build.VERSION.SDK_INT>=31 && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S)>=13
-        val root=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        var gestureBottom = 0
+        val navigationPaint = android.graphics.Paint()
+        // Native root owns PDF insets. Only paint its reserved system-bar strip; never add another content inset.
+        val root=object : LinearLayout(this) {
+            override fun dispatchDraw(canvas: android.graphics.Canvas) {
+                super.dispatchDraw(canvas)
+                if (gestureBottom > 0) canvas.drawRect(0f, (height - gestureBottom).toFloat(), width.toFloat(), height.toFloat(), navigationPaint)
+            }
+        }.apply {orientation=LinearLayout.VERTICAL}
         ViewCompat.setOnApplyWindowInsetsListener(root) {view,insets->
             val safe=insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime=insets.getInsets(WindowInsetsCompat.Type.ime())
-            view.setPadding(safe.left,safe.top,safe.right,maxOf(safe.bottom,ime.bottom));WindowInsetsCompat.CONSUMED
+            gestureBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            view.setPadding(safe.left,safe.top,safe.right,maxOf(safe.bottom,ime.bottom))
+            view.invalidate()
+            WindowInsetsCompat.CONSUMED
         }
         val container=if(supportsAdvanced) FragmentContainerView(this).apply {this.id=PDF_CONTAINER_ID} else null
         val header=ComposeView(this).apply {setContent {
             val settings by preferences.settings.collectAsState()
             ReadXTheme(settings,reading=true) {
                 val background=MaterialTheme.colorScheme.background.toArgb()
-                SideEffect {root.setBackgroundColor(background)}
+                val navigationColor = if(chrome) MaterialTheme.colorScheme.surfaceContainerHigh.toArgb() else background
+                SideEffect {
+                    root.setBackgroundColor(background)
+                    navigationPaint.color = navigationColor
+                    @Suppress("DEPRECATION")
+                    window.navigationBarColor = navigationColor
+                    root.invalidate()
+                }
                 Box(Modifier.fillMaxSize()) {
                     if(!chrome) Text(if(pageCount>0) "${page+1} / $pageCount" else "加载中…",Modifier.align(Alignment.BottomEnd).padding(end=20.dp,bottom=5.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.TopStart)) {
                         Surface(shape=CircleShape,color=MaterialTheme.colorScheme.surfaceContainer.copy(alpha=.94f),modifier=Modifier.padding(10.dp)) {IconButton(onClick={finish()}) {Icon(Icons.AutoMirrored.Rounded.ArrowBack,"返回书库")}}
                     }
                     AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.BottomCenter)) {
-                        Surface(color=MaterialTheme.colorScheme.surfaceContainer) {Column {
+                        Surface(shape=ReadXDesign.readerPanelShape,color=MaterialTheme.colorScheme.surfaceContainerHigh) {Column {
                             if(colorPanel) Column(Modifier.padding(16.dp)) {
                                 Text("标记颜色",style=MaterialTheme.typography.titleSmall);MarkColorPicker(settings.annotationColor) {preferences.update(settings.copy(annotationColor=it))}
                                 Text("PDF 保持原文颜色，不是反色或文字重排。",style=MaterialTheme.typography.bodySmall)
@@ -113,7 +134,7 @@ class PdfActivity : AppCompatActivity() {
                                 IconButton(onClick={notesOpen=true}) {Icon(Icons.Rounded.EditNote,"本书批注")}
                                 IconButton(onClick={if(pageCount>0) jump=true},enabled=pageCount>0) {Icon(Icons.Rounded.Numbers,"跳转页码")}
                                 IconButton(onClick={preferences.update(settings.copy(pdfLayout=if(settings.pdfLayout==PdfReadingLayout.VERTICAL) PdfReadingLayout.HORIZONTAL else PdfReadingLayout.VERTICAL))}) {Icon(if(settings.pdfLayout==PdfReadingLayout.HORIZONTAL) Icons.Rounded.ViewAgenda else Icons.Rounded.ViewCarousel,"切换 PDF 横向或纵向阅读")}
-                                IconButton(onClick={colorPanel=!colorPanel}) {Icon(Icons.Rounded.Palette,"标记颜色")}
+                                FilledTonalIconToggleButton(checked=colorPanel,onCheckedChange={colorPanel=it}) {Icon(Icons.Rounded.Palette,"标记颜色")}
                                 if(supportsAdvanced && settings.pdfLayout==PdfReadingLayout.VERTICAL) IconButton(onClick={viewer?.isTextSearchActive=true}) {Icon(Icons.Rounded.Search,"PDF 搜索")}
                             }
                         }}
@@ -228,12 +249,21 @@ class ReadXPdfFragment : PdfViewerFragment() {
         val parent=pdfView.parent
         if(parent is FrameLayout) parent.addView(overlayView,FrameLayout.LayoutParams(-1,-1))
         else {pdfView.overlay.add(overlayView);pdfView.addOnLayoutChangeListener {_,_,_,_,_,_,_,_,_->overlayView.layout(0,0,pdfView.width,pdfView.height)}}
-        var touchX=0f;var touchY=0f;var touchTime=0L
-        pdfView.setOnTouchListener {_,event->
-            if(event.actionMasked==android.view.MotionEvent.ACTION_DOWN) {touchX=event.x;touchY=event.y;touchTime=event.eventTime}
-            if(event.actionMasked==android.view.MotionEvent.ACTION_UP && event.eventTime-touchTime<300 && kotlin.math.abs(event.x-touchX)<12 && kotlin.math.abs(event.y-touchY)<12 && pdfView.currentSelection==null) {
-                overlayView.hit(event.x,event.y)?.let {(activity as? PdfActivity)?.openMarked(it);return@setOnTouchListener true}
+        // The annotation listener replaces the fragment's internal tap detector. Handle single taps
+        // explicitly instead of using immersive-mode state, which also changes during scrolling.
+        val taps = GestureDetector(requireContext(), object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(event: MotionEvent) = true
+            override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
+                val host = activity as? PdfActivity ?: return false
+                if (host.isHorizontal() || pdfView.currentSelection != null) return false
+                val marked = overlayView.hit(event.x, event.y)
+                if (marked != null) host.openMarked(marked) else host.toggleChrome()
+                return false
             }
+        })
+        pdfView.setOnTouchListener { _, event ->
+            taps.onTouchEvent(event)
+            // Never consume the PDF stream: scrolling, pinch/double-tap zoom and selection stay native.
             false
         }
         pdfView.addSelectionMenuItemPreparer(object: PdfView.SelectionMenuItemPreparer {
@@ -264,7 +294,9 @@ class ReadXPdfFragment : PdfViewerFragment() {
         if (!restoringSavedViewport) currentView?.post {currentView?.scrollToPage(requireArguments().getInt("initialPage").coerceIn(0,document.pageCount-1))}
     }
     override fun onLoadDocumentError(error: Throwable) { (activity as? PdfActivity)?.failed(error) }
-    override fun onRequestImmersiveMode(enterImmersive: Boolean) {(activity as? PdfActivity)?.toggleChrome()}
+    override fun onRequestImmersiveMode(enterImmersive: Boolean) {
+        // ReadX owns its controls. AndroidX scroll-driven immersive requests must not toggle them.
+    }
     override fun onLinkClicked(externalLink: ExternalLink): Boolean {
         Toast.makeText(context, "外部链接未打开：本版本仅访问本地内容", Toast.LENGTH_SHORT).show(); return true
     }

@@ -6,3 +6,9 @@ local.properties
 .research/
 *.iml
 captures/
+
+# Local acceptance books are private inputs, not repository assets.
+/*.epub
+/*.pdf
+
+/*.traineddata

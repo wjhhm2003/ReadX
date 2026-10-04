@@ -112,3 +112,85 @@ PDF Activity 的原生根布局独占 systemBars/displayCutout/IME 安全区；�
 - Room v4 增加 color/anchorKey/updatedAt，以及非唯一的查询索引。MIGRATION_3_4 给旧标记补默认色与稳定区间键，保留全部旧 ID、引用位置和笔记，不静默合并或删除冲突笔记。事务 upsert 防止新增相同书籍/选段/类型的重复记录；旧重复记录可由用户直接取消。附带笔记的高亮取消后转换为笔记，避免取消视觉样式顺便丢失文字。
 - 主题根因是仅复制动态方案少数 primary/secondary 字段，其他容器仍固定蓝色，且继续阅读卡片硬编码绿色。改用完整 dynamicLightColorScheme/dynamicDarkColorScheme；静态主题生成全套不透明表面与容器角色，移除硬编码卡片颜色。阅读纸张/文字是有意的独立覆盖，不将应用主题色当阅读背景。
 - 按官方 Material 3 Compose 文档与当前固定依赖源码核实：动态取色要求 Android 12+，由系统壁纸色决定；开启时优先于自定义种子色，旧系统回退静态色。设置页显示实际渲染 primary 的十六进制预览，区分“颜色值已存储”与“界面已应用”。依据：developer.android.com/develop/ui/compose/designsystems/material3；固定 1.5.0-alpha01 的 MaterialTheme.kt 和 DynamicTonalPalette.android.kt，诊断副本在 .research，不作为运行时依赖。
+
+
+## 0.3.2 首屏优先与渐进分页
+
+### 选择同一排版引擎，而非独立 StaticLayout 计数
+
+- 当前 TXT 导入会生成 HTML，EPUB 保留图片、样式和本地链接，二者实际由 Chromium 多栏排版。另用 StaticLayout 只统计纯文字会与实际页面不一致，不能标为精确全书页数。本轮不引入未使用的 FastPaginator、不替换渲染引擎；TXT 原生显示/分页的一致性与性能对照留作后续评估。
+- 前台在实测布局完成后加载。通过资源状态（图片完成、字体 loaded）、连续渲染帧的滚动范围/高度一致，以及 VisualStateCallback 提交确认恢复，不再要求固定的六轮 50/60ms 最低等待。稳定检查限时 8 秒；统计单章加载限时 10 秒。失败明确提示，不用超时兜底发布“精确”页数。
+- 初始恢复、文字批注和位置跳转完成并视觉提交后，才回报 onReady。此时复用当前章节实测页数，不让隐藏 WebView 与首屏同时初始化、重复解析同章。缺失工作至少让出一个绘制帧；完整缓存命中不创建第二个 WebView，完成或失败后释放。
+
+### 分页状态与取消
+
+- PaginationCoordinator 的 StateFlow 只保存实测 BookPageIndex 和错误，未知章节为 null。全部章节已测量才公开绝对总页数及全书滑条映射；统计过程中显示真实的本章页码和已测章节数，不用字符密度估算伪装精准页数。
+- 按当前章→后邻→前邻→向外扩展的顺序测量缺失章节。结构化 LaunchedEffect 持有任务，章节/布局/重试变化或离开阅读页取消旧工作；WebView 调用及取消清理显式使用 Dispatchers.Main.immediate，文件和缓存操作使用后台 IO。没有应用级全局分页循环。
+- 每个已测章节独立落盘；中断后复用已持久化部分，当前前台结果为准。若前台与同键缓存页数不同，丢弃该布局的旧索引并重新测量，而不是继续显示一个已经失效的精确总数。超时被转换为可重试的统计错误，真正的协程取消继续传播。
+
+### 布局指纹与缓存
+
+- LayoutConfig 的 SHA-256 输入包含引擎版本、原书内容指纹、章节 href 顺序、实测原生宽高、设备密度、系统字体缩放、字号、行高、边距、衬线选择、WebView 包及版本、系统构建版本、语言。输入用长度前缀编码，避免 href 分隔符碰撞。主题色、批注颜色不影响页数，不进入键。
+- PageIndexCache 使用 cacheDir/page-indices-v2 的定长二进制文件，仅保存页数，零表示未知；无正文、笔记或无实际消费者的页偏移数组。写入临时文件后同文件系统原子替换，读取校验 magic、章节数、长度、页数范围和总数溢出；损坏视作未命中。单书保留最近五种布局、全局最多 24 份，单份最多 10000 章。超过缓存限额只跳过持久化，不禁止分页。缓存 IO 失败不影响正文与内存中统计结果。
+- 缓存是可丢弃派生数据，不修改 Room v4、不新增迁移，也不改原书、批注或进度定位语义。旧 page-indices JSON 不再读取，留待系统清理应用缓存。
+
+### 重排文字锚点与 Chromium 视口
+
+- HTML 中由原生添加不可由书籍伪造的加载代次标记，稳定检查同时校验该标记，避免同 URL 重排时旧 onPageFinished 被误当作新文档。连续快速修改排版时复用尚未完成恢复的原始文字锚点/回退进度，取消旧加载，不读取半排版 DOM。
+- 在旧 DOM 的原生翻页已视觉提交后捕获 viewportAnchor；再设置新模式/textZoom、清零新文档初始原生滚动位置并加载。避免 scrollTo 后立即 evaluateJavascript 读到上一页 DOM 视口，以及继承旧原生 scrollX 导致锚点重复偏移。
+- 使用现有 UTF-16 偏移+原文+前后文定位，不新增与 Chromium 不一致的 StaticLayout 字符范围。找到锚点时只应用文字位置，不先应用相对进度，避免先原生滚动再 DOM 滚动造成竞态；定位失败才回退旧 fraction。最终视觉提交之前不回报进度或发布前台页数。
+- 普通阅读进度的跨进程持久化仍是原有章节/fraction；本轮改进的是会话内重排/模式切换恢复，不宣传为通用 EPUB CFI 或所有复杂版式完全兼容。
+
+
+## 0.3.3 PDF 点击热修复
+
+- 固定版本 AndroidX PdfViewerFragment 在 setupPdfView 中安装单击 GestureDetector，并在 onPdfViewCreated 后允许宿主覆盖监听。旧批注 OnTouchListener 覆盖该监听，却仍以 onRequestImmersiveMode 作为切换底栏的唯一入口；该回调还受滚动位置影响，不代表每一次单击。
+- 高级纵向阅读在现有 PdfView 监听里合并应用 GestureDetector，仅 onSingleTapConfirmed 显隐 ReadX 底栏，不依赖页码或滚动位置。触摸流不消费，原生滚动、缩放、双击和长按选区仍接收事件；已有标记点击仍优先编辑。AndroidX 的滚动驱动沉浸请求不再反向切换应用底栏。
+- 横向单页（高级与基础回退共用）以屏幕阅读区域横坐标划分三等份：左/右调用 Pager 翻页，中间显隐底栏或编辑已有标记；到书首/书尾不越界，正在滚动时不排队启动点击翻页。原有滑动、双指缩放和长按批注路径不变。
+- 本轮按用户要求只构建 APK，不运行单元/设备测试、Lint 或安装启动验收；手势实际表现待用户验证。数据库、源文件、隐私边界及依赖不变。
+
+
+## 0.4.0 离线 PDF → EPUB
+
+### 用户数据与派生文件
+
+- 默认关闭的全局 `pdfToEpubEnabled` 在下一次打开 PDF 时路由到转换任务；模型语言配置独立持久化。不开启时不改原有 PdfActivity。生成成功后使用新 UUID EPUB 书籍；原 PDF 的页码、进度、批注和副本不变。
+- Room v5 增加 `pdf_conversions`，有源指纹/配置指纹唯一键、源/结果书籍的 nullable 外键（SET NULL），保存状态、页数、原图页数、配置和 runId。显式 `MIGRATION_4_5` 保留书库/章节/书签/批注；历史 schema 保留。删除来源先取消/等待该来源资源释放，再只删除原副本；转换版不级联删除。删除转换版使结果关联为空，下次按需重建。
+- 检查点存 `files/pdf-conversions/<sha256>/page-<n>.json` 和真实页图，不塞入 SQLite。每页有限额、临时文件原子替换，只读完整检查点；部分转换失败不新增半本书。最终 EPUB 经既有 BookParser 验证并复用导入事务，同时写入书籍/章节/来源关联，runId+IMPORTING 校验阻止取消/旧任务发布。取消保留检查点供继续；删除源文件清理本任务目录；完成后清理中间文件。
+
+### 识别与资源界限
+
+- PdfBox-Android 2.0.27.0 提取原始文字、TextPosition 和 PDF 目录。中文字形兼容部首局部 NFKC 规范化（不全局规范化数学上标）；单栏/基本双栏几何排序和断词连接，不执行书籍脚本。
+- 每页独立决定是否 OCR。Tesseract4Android Standard 4.9.0 使用本地 LSTM 与 hOCR 位置输出；一个任务一次一页，不以全书截图/整书内存识别。模型不可联网获取；64 MiB 受限复制、SHA-256 版本目录、Tesseract 初始化成功才更新活动指针。运行任务引用固定哈希，替换模型不覆盖正在使用的数据；切换模型的续算仅移用未经 OCR 的已完成页，防止混合识别版本。
+- 图像/矢量复杂内容、非横排、公式/小单元格或阅读顺序歧义采用保守整页原图。它不是智能版面语义检测，扫描图中的插图/公式仍可能漏判；提供原版回看。无可重排正文则失败，不把纯图片包装成转换成功。
+- 源书 256 MB，PDF 文档解析采用 8 MiB 内存/256 MiB 临时存储设置；单页最多 200000 字形；一次位图最长边 2400 px、最多 400 万像素。转换暂存及 EPUB 解压资源累计 160 MiB，单资源 24 MiB、单章 8 MiB、总资源数最多 10000；超限明确失败。首版不处理密码 PDF，不存密码。
+
+### 后台生命周期
+
+- WorkManager 2.11.2 按来源/配置唯一排队，应用内全局 Mutex 串行转换、来源 lease 保护文件生命周期。Worker 从开始即设置 foreground 通知；新增 POST_NOTIFICATIONS、FOREGROUND_SERVICE/DATA_SYNC，WorkManager 声明的 WAKE_LOCK/RECEIVE_BOOT_COMPLETED 用于调度。仍删除 INTERNET 和 ACCESS_NETWORK_STATE，无服务器或云模型。
+- 阶段为 QUEUED/EXTRACTING/OCR/WAITING_MODEL/PACKAGING/IMPORTING/COMPLETE/CANCELLED/FAILED。进度只报告已完成原文页数，打包不是伪造预计百分比。通知不放书名、正文或笔记；拒绝通知授权仍可在应用内观察状态。Android 系统任务配额仍可能中断，不能承诺永久后台运行。
+- CancellationException 继续传播，检查点在恢复后重用；native OCR 正在识别当前页时取消可能需等该页调用结束，随后不再发布结果。runId 防止老任务的状态/事务覆盖新一轮任务；取消阶段更新在 DAO 条件中不可反向覆盖。
+
+### EPUB 输出与原页映射
+
+- `EpubOutput` Kotlin 适配 epub-generator 的 mimetype-first ZIP、container/OPF/nav/spine 模板；XHTML 采用 XML 序列化。优先真实 PDF 目录，其次基础标题识别，最后按 24 原页/250000 字符拆章。文字跨页连接保留源页 span，英文跨行断词不引入重复字；封面为真实 PDF 首页图。
+- EPUB 正文/图片完全自包含，不要求 ReadX 才能阅读。`data-source-page` 是数据，仅应用受控脚本只读当前可见位置；来源映射通过 Room 关联开放到原 PDF 页，不在书内拼接脚本或接受任意 file/content URL。通用阅读器能读正文但不会自动拥有 ReadX 原文件关联。
+- 转换版内的进度面板通过 ViewModel/Repository 导出至 SAF，后台复制有取消检查。来源删除后关联流更新，禁用原 PDF 入口。既有 EPUB 搜索、排版分页缓存、UTF-16 标记直接复用，PDF 页坐标批注不迁移。
+- 开源许可及精确复用范围见 `docs/THIRD_PARTY.md`。不宣传这是 pdf-craft 全模型移植、通用 PDF 保真重排或高准确 OCR 引擎。
+
+
+## 0.5.0 共享设计系统
+
+- 新增 `ui/DesignSystem.kt` 作为间距、形状和应用字阶入口，通过 `MaterialExpressiveTheme` 注入，书架/批注/设置和阅读覆盖控件复用语义表面。正文 WebView 排版仍由 ReaderSettings/实际测量控制，不把 Compose 应用字体替换成正文设置。
+- 主题种子通过已有 Material Views 依赖的公开 `MaterialColors.getColorRoles` 生成 HCT 色调配对；不使用其受限 utilities API，也不新增依赖。完整动态颜色保留为另一条分支；阅读纸张覆盖与品牌主题隔离。颜色预览展示实际强调色，用户输入仅作为种子。
+- 根据 BoxWithConstraints 的实际可用宽度在 600dp 选择 NavigationBar/NavigationRail，内容最大 840dp。未引入新导航框架或更换 ViewModel/Repository，不影响数据库 UUID、Room schema、PDF 引擎能力检查和私有文件。
+- 书架列表基于当前页面决定筛选：筛选仅应用于书库，不让用户不可见的书库筛选影响首页。继续阅读进度仍采用现有 progress()，文本加“约”说明其估算语义。
+- 阅读/PDF 操作栏只改覆盖层形状和选中态，不修改容器尺寸/安全区和手势路径。设计与限制详见 `DESIGN.md`。
+
+
+### 系统手势条与退出快照
+
+- 紧凑书架的外层只处理顶部/横向 safeDrawing 和 IME；NavigationBar 自己消费底部 navigationBars，并将表面背景画到手势条下。宽屏和正文仍保留原 safeDrawing 区域，不重复加底部距离。
+- `SystemNavigationProtection` 只在系统手势带画同色背景，不添加 padding；正文工具栏展开时通过回调选择 surfaceContainerHigh，隐藏时选择纸张色。因此显隐不改变 WebView 高度，也不触发分页。
+- PDF 的原生根布局继续唯一负责 systemBars/cutout/IME padding。根布局 dispatchDraw 只补画已保留的 navigationBars 底色；Compose 不再次消费 PDF 系统边距。旧系统导航栏颜色由同一显示层同步，Theme 仅管理系统栏明暗图标。
+- 设备回归确认程序关闭阅读后，销毁中的 WebView 可返回已偏移的 scrollX（目标第3页，后续旧回调曾覆盖为第2页）。`LibraryViewModel.close` 在移除 session 前持久化最后一次有效进度；关闭后不再接受旧 view 的 final 覆盖。UI 退出先结束翻页动画并 report；仍保留活动 session 的生命周期最终落盘，数据库与位置语义不变。

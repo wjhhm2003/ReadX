@@ -4,6 +4,10 @@ package io.readx.app.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import io.readx.app.pdf.PdfActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -45,14 +49,18 @@ import io.readx.app.reader.*
 private enum class ReaderPanel(val label: String) { CONTENTS("目录"), ANNOTATIONS("批注"), PROGRESS("进度"), PAPER("背景"), TYPE("排版") }
 
 @Composable
-internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettings,vm: LibraryViewModel,showSettings: ()->Unit,search: ()->Unit) {
+internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettings,vm: LibraryViewModel,showSettings: ()->Unit,search: ()->Unit,onChromeChange: (Boolean)->Unit = {}) {
     var chrome by rememberSaveable(session.book.id) {mutableStateOf(false)}
+    LaunchedEffect(chrome) { onChromeChange(chrome) }
+    DisposableEffect(Unit) { onDispose { onChromeChange(false) } }
     var panel by rememberSaveable(session.book.id) {mutableStateOf<ReaderPanel?>(null)}
     var page by remember(session.book.id,session.navigationId,settings.layout) {mutableIntStateOf(1)}
-    var chapterPages by remember(session.book.id,session.navigationId,settings.layout) {mutableIntStateOf(0)}
+    val density = LocalDensity.current
+    var chapterPages by remember(session.book.id,session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,density) {mutableIntStateOf(0)}
     var fraction by remember(session.book.id,session.navigationId) {mutableFloatStateOf(session.fraction)}
     var viewport by remember(session.book.id) {mutableStateOf(0 to 0)}
-    var index by remember(session.book.id,viewport,settings.fontSize,settings.lineHeight,settings.margin,settings.serif) {mutableStateOf<BookPageIndex?>(null)}
+    var foregroundPages by remember(session.book.id,session.navigationId,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,density) {mutableStateOf<Int?>(null)}
+    var index by remember(session.book.id,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,density) {mutableStateOf<BookPageIndex?>(null)}
     var error by remember {mutableStateOf<String?>(null)}
     var retry by remember {mutableIntStateOf(0)}
     var seeking by remember(session.book.id,viewport,settings.layout) {mutableStateOf<Float?>(null)}
@@ -66,15 +74,27 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
     val current=index?.globalPage(session.chapter,page)
     val total=index?.total
     val context=LocalContext.current
+    var convertedSource by remember(session.book.id) { mutableStateOf<io.readx.app.data.Book?>(null) }
+    val sourceFlow=remember(session.book.id) {vm.conversions.dao.observeSourceOf(session.book.id)}
+    val convertedLink by sourceFlow.collectAsStateWithLifecycle(null)
+    val isConverted=convertedLink!=null
+    LaunchedEffect(convertedLink?.sourceBookId) {
+        convertedSource=convertedLink?.sourceBookId?.let {vm.repository.dao.book(it)}
+    }
+    val export=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/epub+zip")) {uri->if(uri!=null) vm.exportConverted(session.book.id,uri)}
+
+    fun closeReader() {controller.view?.finishTransition();controller.view?.report();vm.close()}
     fun clearSelection() {selection=null;controller.view?.clearReaderSelection()}
     fun dismissControls() {panel=null;chrome=false;clearSelection()}
     BackHandler {
-        when {selection!=null->clearSelection();panel!=null->panel=null;chrome->dismissControls();session.returnStack.isNotEmpty()->vm.returnFromLink();else->vm.close()}
+        when {selection!=null->clearSelection();panel!=null->panel=null;chrome->dismissControls();session.returnStack.isNotEmpty()->vm.returnFromLink();else->closeReader()}
     }
     Box(Modifier.fillMaxSize()) {
         // Full measured safe area at all times. Controls overlay the page instead of reserving invisible bands.
         val reading=Modifier.fillMaxSize()
-        if(settings.layout==ReadingLayout.PAGED) BookPageCounter(session.book,session.chapters,settings,vm.repository,viewport,reading,retry) {value,failure->index=value;error=failure}
+        if(settings.layout==ReadingLayout.PAGED && foregroundPages!=null && viewport.first>0 && viewport.second>0) {
+            BookPageCounter(session.book,session.chapters,settings,vm.repository,viewport,reading,retry,session.chapter,foregroundPages!!) {value,failure->index=value;error=failure}
+        }
         val ink="#%06X".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xFFFFFF)
         val paper="#%06X".format(MaterialTheme.colorScheme.background.toArgb() and 0xFFFFFF)
         WebReader(session,settings,vm.repository,ink,paper,reading.testTag("reader-content"),
@@ -88,18 +108,20 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
                 if(vm.isCurrentNavigation(session.book.id,session.navigationId)) {
                     fraction=position;page=local;chapterPages=count
                     if(final) vm.savePosition(session.book.id,session.chapter,position) else vm.position(session.book.id,session.chapter,position)
-                } else if(final && vm.reader.value==null) vm.savePosition(session.book.id,session.chapter,position)
-            },vm::notify,controller)
+                } // Explicit close is persisted by the ViewModel before this view is detached.
+            },{message->chrome=true;vm.notify(message)},controller,onReady={ count ->
+                if(vm.isCurrentNavigation(session.book.id,session.navigationId)) foregroundPages=count
+            })
         if(!chrome && selection==null) Text(
-            if(chapterPages==0) "排版中…" else if(settings.layout==ReadingLayout.SCROLL) "${(fraction*100).toInt()}%" else if(current!=null && total!=null) "$current / $total" else "统计 ${index?.measured ?: 0}/${session.chapters.size}",
+            if(chapterPages==0) "排版中…" else if(settings.layout==ReadingLayout.SCROLL) "${(fraction*100).toInt()}%" else if(current!=null && total!=null) "$current / $total" else "本章 $page / $chapterPages · 统计 ${index?.measured ?: 0}/${session.chapters.size}",
             modifier=Modifier.align(Alignment.BottomEnd).padding(end=20.dp,bottom=5.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.TopStart),enter=fadeIn(),exit=fadeOut()) {
             Surface(shape=CircleShape,color=MaterialTheme.colorScheme.surfaceContainer.copy(alpha=.94f),modifier=Modifier.padding(10.dp)) {
-                IconButton(onClick={if(session.returnStack.isNotEmpty()) vm.returnFromLink() else vm.close()}) {Icon(Icons.AutoMirrored.Rounded.ArrowBack,if(session.returnStack.isNotEmpty()) "回到原处" else "返回书架")}
+                IconButton(onClick={if(session.returnStack.isNotEmpty()) vm.returnFromLink() else closeReader()}) {Icon(Icons.AutoMirrored.Rounded.ArrowBack,if(session.returnStack.isNotEmpty()) "回到原处" else "返回书架")}
             }
         }
         AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.BottomCenter),enter=slideInVertically {it}+fadeIn(),exit=slideOutVertically {it}+fadeOut()) {
-            Surface(color=MaterialTheme.colorScheme.surfaceContainer) {
+            Surface(shape=ReadXDesign.readerPanelShape,color=MaterialTheme.colorScheme.surfaceContainerHigh) {
                 Column(Modifier.fillMaxWidth()) {
                     AnimatedContent(targetState=panel,label="reader-panel",transitionSpec={fadeIn() togetherWith fadeOut()}) {active->
                         when(active) {
@@ -116,6 +138,17 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
                                     };seeking=null},valueRange=1f..total.coerceAtLeast(2).toFloat(),enabled=total>1 && chapterPages>0)
                                 else Text(if(error!=null) "统计未完成：$error" else if(settings.layout==ReadingLayout.SCROLL) "滚动模式不显示固定页数" else "按当前排版统计中…",style=MaterialTheme.typography.bodySmall)
                                 if(error!=null) TextButton(onClick={retry++}) {Text("重新统计")}
+                                if(isConverted) Row {
+                                    TextButton(onClick={
+                                        val original=convertedSource ?: return@TextButton
+                                        controller.view?.trusted("window.ReadX.sourcePage()") {value->
+                                            val target=value.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                                            context.startActivity(Intent(context,PdfActivity::class.java).putExtra("bookId",original.id).putExtra("page",target))
+                                        }
+                                    },enabled=convertedSource!=null) {Text("查看原 PDF")}
+                                    TextButton(onClick={export.launch(session.book.title+".epub")}) {Text("导出 EPUB")}
+                                }
+
                                 if(session.returnStack.isNotEmpty()) TextButton(onClick=vm::returnFromLink) {Text("回到原处")}
                             }
                             ReaderPanel.PAPER->ReaderPaperPanel(settings,vm.preferences::update)
@@ -123,11 +156,11 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
                             else->Spacer(Modifier.height(0.dp))
                         }
                     }
-                    Row(Modifier.fillMaxWidth().height(64.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceEvenly) {
+                    Row(Modifier.fillMaxWidth().heightIn(min=64.dp).padding(horizontal=8.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceEvenly) {
                         ReaderPanel.entries.forEach {item->
-                            IconButton(onClick={clearSelection();panel=if(panel==item) null else item}) {
+                            FilledTonalIconToggleButton(checked=panel==item,onCheckedChange={clearSelection();panel=if(panel==item) null else item}) {
                                 val icon=when(item) {ReaderPanel.CONTENTS->Icons.AutoMirrored.Rounded.List;ReaderPanel.ANNOTATIONS->Icons.Rounded.EditNote;ReaderPanel.PROGRESS->Icons.Rounded.Tune;ReaderPanel.PAPER->Icons.Rounded.Brightness6;ReaderPanel.TYPE->Icons.Rounded.TextFields}
-                                Icon(icon,item.label,tint=if(panel==item) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.size(27.dp))
+                                Icon(icon,item.label,modifier=Modifier.size(24.dp))
                             }
                         }
                     }
@@ -228,10 +261,10 @@ internal fun MarkColorPicker(selected:String,onColor:(String)->Unit) {
 private fun ReaderPaperPanel(settings:ReaderSettings,update:(ReaderSettings)->Unit) {
     Column(Modifier.padding(horizontal=20.dp,vertical=16.dp)) {
         Text("阅读背景",style=MaterialTheme.typography.titleSmall);Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+        FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             listOf(ReadingTheme.DAY to 0xFFFCFCFA,ReadingTheme.WARM to 0xFFF6EBD5,ReadingTheme.MINT to 0xFFE0F0D9,ReadingTheme.NIGHT to 0xFF151515,ReadingTheme.BLACK to 0xFF000000).forEach {(theme,raw)->
-                Surface(onClick={update(settings.copy(theme=theme))},modifier=Modifier.weight(1f).height(48.dp),shape=RoundedCornerShape(13.dp),color=Color(raw),border=androidx.compose.foundation.BorderStroke(if(theme==settings.theme) 2.dp else 1.dp,if(theme==settings.theme) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
-                    Box(contentAlignment=Alignment.Center) {Text(theme.label,style=MaterialTheme.typography.labelSmall,color=if(theme in listOf(ReadingTheme.BLACK,ReadingTheme.NIGHT)) Color(0xFFBDBDBD) else Color(0xFF333333))}
+                Surface(onClick={update(settings.copy(theme=theme))},modifier=Modifier.widthIn(min=56.dp).heightIn(min=48.dp),shape=MaterialTheme.shapes.medium,color=Color(raw),border=androidx.compose.foundation.BorderStroke(if(theme==settings.theme) 2.dp else 1.dp,if(theme==settings.theme) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
+                    Box(contentAlignment=Alignment.Center) {Text(theme.label,Modifier.padding(12.dp),style=MaterialTheme.typography.labelLarge,color=if(theme in listOf(ReadingTheme.BLACK,ReadingTheme.NIGHT)) Color(0xFFBDBDBD) else Color(0xFF333333))}
                 }
             }
         }

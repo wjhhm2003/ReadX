@@ -34,7 +34,7 @@ class AnnotationMigrationInstrumentedTest {
                 old.execSQL("INSERT INTO bookmarks VALUES ('old-mark','old-book',0,0.5,'原书签',3)")
                 old.version=2
             }
-            val db=Room.databaseBuilder(app,LibraryDatabase::class.java,name).addMigrations(MIGRATION_1_2,MIGRATION_2_3,MIGRATION_3_4).build()
+            val db=Room.databaseBuilder(app,LibraryDatabase::class.java,name).addMigrations(MIGRATION_1_2,MIGRATION_2_3,MIGRATION_3_4,MIGRATION_4_5).build()
             try {
                 val book=db.library().book("old-book")!!
                 assertEquals("原标签",book.tags);assertEquals("cover.png",book.coverPath);assertEquals(.5f,book.scrollFraction)

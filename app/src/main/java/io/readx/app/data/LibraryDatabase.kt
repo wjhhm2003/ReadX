@@ -1,6 +1,8 @@
 package io.readx.app.data
 
 import androidx.room.*
+import io.readx.app.conversion.PdfConversion
+import io.readx.app.conversion.PdfConversionDao
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "books", indices = [Index(value = ["fingerprint"], unique = true)])
@@ -114,8 +116,8 @@ interface LibraryDao {
     @Query("DELETE FROM books WHERE id=:id") suspend fun delete(id: String)
 }
 
-@Database(entities = [Book::class, Chapter::class, Bookmark::class, Annotation::class], version = 4, exportSchema = true)
-abstract class LibraryDatabase : RoomDatabase() { abstract fun library(): LibraryDao }
+@Database(entities = [Book::class, Chapter::class, Bookmark::class, Annotation::class, PdfConversion::class], version = 5, exportSchema = true)
+abstract class LibraryDatabase : RoomDatabase() { abstract fun library(): LibraryDao; abstract fun conversions(): PdfConversionDao }
 
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
@@ -157,5 +159,14 @@ val MIGRATION_3_4 = object : androidx.room.migration.Migration(3,4) {
             }
         }
         db.execSQL("CREATE INDEX IF NOT EXISTS index_annotations_bookId_kind_anchorKey ON annotations(bookId,kind,anchorKey)")
+    }
+}
+
+val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS pdf_conversions (id TEXT NOT NULL, sourceBookId TEXT, sourceFingerprint TEXT NOT NULL, configFingerprint TEXT NOT NULL, optionsJson TEXT NOT NULL, stage TEXT NOT NULL, completedPages INTEGER NOT NULL, totalPages INTEGER NOT NULL, imagePages INTEGER NOT NULL, resultBookId TEXT, error TEXT NOT NULL, updatedAt INTEGER NOT NULL, runId TEXT NOT NULL DEFAULT '', PRIMARY KEY(id), FOREIGN KEY(sourceBookId) REFERENCES books(id) ON UPDATE NO ACTION ON DELETE SET NULL, FOREIGN KEY(resultBookId) REFERENCES books(id) ON UPDATE NO ACTION ON DELETE SET NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_pdf_conversions_sourceBookId ON pdf_conversions(sourceBookId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_pdf_conversions_resultBookId ON pdf_conversions(resultBookId)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_pdf_conversions_sourceFingerprint_configFingerprint ON pdf_conversions(sourceFingerprint,configFingerprint)")
     }
 }

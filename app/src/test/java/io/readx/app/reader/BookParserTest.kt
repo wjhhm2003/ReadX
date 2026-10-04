@@ -110,6 +110,14 @@ class BookParserTest {
         assertTrue(html.contains("script-src 'none'"))
         assertTrue(Jsoup.parse(html).select("script").isEmpty())
     }
+    @Test fun nativeLoadMarkerCannotBeSpoofedByBookHtml() {
+        val prepared = LocalHtml.prepare("<body data-readx-load='999' onload='evil()'><p>正文</p><script>evil()</script></body>", ReaderSettings(), "#111111", "#ffffff", loadGeneration = 42)
+        val document = Jsoup.parse(prepared)
+        assertEquals("42", document.body().attr("data-readx-load"))
+        assertFalse(document.body().hasAttr("onload"))
+        assertTrue(document.select("script").isEmpty())
+        assertTrue(prepared.contains("script-src 'none'"))
+    }
     private fun zip(entries: Map<String, String>): File {
         val file = temp.newFile("book-" + System.nanoTime() + ".epub")
         ZipOutputStream(file.outputStream()).use { zip -> entries.forEach { (name, text) ->

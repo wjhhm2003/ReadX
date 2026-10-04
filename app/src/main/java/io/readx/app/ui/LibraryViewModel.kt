@@ -22,6 +22,14 @@ data class ReaderSession(val book: Book, val chapters: List<Chapter>, val chapte
 data class SearchHit(val book: Book, val chapter: Chapter, val snippet: String, val query: String, val occurrence: Int)
 
 class LibraryViewModel(app: Application) : AndroidViewModel(app) {
+    private val readx = app as ReadXApplication
+    val conversions = readx.conversions
+    val conversionTasks = conversions.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val models = readx.ocrModels.models
+    private val _conversionId = MutableStateFlow<String?>(null)
+    val conversionId = _conversionId.asStateFlow()
+    private val _modelBusy = MutableStateFlow(false)
+    val modelBusy = _modelBusy.asStateFlow()
     val repository = (app as ReadXApplication).repository
     val books = repository.books.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val annotations = repository.dao.observeAnnotations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -90,6 +98,38 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             catch (e: Exception) { notify(e.message ?: "示例加载失败") }
             finally { _busy.value = false }
         }
+    }
+    private val _licenses=MutableStateFlow<String?>(null)
+    val licenses=_licenses.asStateFlow()
+    fun closeLicenses() {_licenses.value=null}
+    fun showLicenses()=viewModelScope.launch {
+        _licenses.value=withContext(Dispatchers.IO) {
+            listOf("pdf-craft","epub-generator","PdfBox-Android","Tesseract4Android").joinToString("\n\n") {name->
+                "$name\n"+getApplication<Application>().assets.open("licenses/$name.txt").reader().use {it.readText()}
+            }
+        }
+    }
+    fun convertPdf(book: Book) = viewModelScope.launch {
+        try { _conversionId.value = conversions.start(book.id,readx.ocrModels.snapshot(settings.value.ocrLanguages)) }
+        catch(e: CancellationException) {throw e} catch(_: Exception) {notify("无法开始转换，请使用原版阅读")}
+    }
+    fun showConversion(id: String) { if(id.matches(Regex("[a-f0-9]{64}"))) _conversionId.value=id }
+    fun dismissConversion() {_conversionId.value=null}
+    fun cancelConversion(id: String) = viewModelScope.launch { conversions.cancel(id) }
+    fun resumeConversion(id: String) = viewModelScope.launch {
+        try {_conversionId.value=conversions.resume(id)} catch(e: CancellationException) {throw e} catch(_: Exception) {notify("无法继续：请检查原 PDF 和模型")}
+    }
+    fun importModels(uris: List<Uri>) = viewModelScope.launch {
+        _modelBusy.value=true
+        try {
+            withContext(Dispatchers.IO) {uris.forEach {readx.ocrModels.import(it)}}
+            notify("OCR 模型已导入")
+        } catch(e: CancellationException) {throw e} catch(e: Exception) {notify(e.message ?: "模型导入失败")}
+        finally {_modelBusy.value=false}
+    }
+    fun exportConverted(bookId: String, uri: Uri) = viewModelScope.launch {
+        try {conversions.export(bookId,uri);notify("EPUB 已导出")}
+        catch(e: CancellationException) {throw e} catch(_: Exception) {notify("导出失败，请重新选择保存位置")}
     }
     fun open(book: Book) {
         openJob?.cancel()
@@ -181,6 +221,9 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun close() {
         openJob?.cancel()
+        // Persist the last live position before removing the view. A detached WebView may clamp scrollX
+        // during teardown, so its later onRelease must not overwrite this snapshot with a stale page.
+        _reader.value?.let { savePosition(it.book.id, it.chapter, latestFraction) }
         _reader.value = null
     }
     fun edit(book: Book, title: String, author: String, tags: String) = viewModelScope.launch {

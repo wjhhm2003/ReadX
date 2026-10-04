@@ -146,7 +146,24 @@
     if (!paged) window.scrollTo(0,Math.max(0,b.top+scrollY-20));
     return {found:true,page:Math.floor((b.left+scrollX)/parseFloat(getComputedStyle(document.body).width)+0.001)+1};
   }
-  window.ReadX = Object.freeze({selection,selectionInfo,markAt,viewportAnchor,marks,navigate,
+  function sourcePage() {
+    const list=nodes();
+    for (const n of list) {
+      if (!n.node.data.trim()) continue;
+      const e=n.node.parentElement.closest('[data-source-page]'); if (!e) continue;
+      const r=document.createRange(); r.selectNodeContents(n.node);
+      if ([...r.getClientRects()].some(b => b.right>0 && b.left<innerWidth && b.bottom>0 && b.top<innerHeight)) {
+        const value=Number(e.getAttribute('data-source-page'));
+        if(Number.isInteger(value) && value>=0) return value;
+      }
+    }
+    for (const image of document.images) {
+      const e=image.closest('[data-source-page]'); const b=image.getBoundingClientRect();
+      if(e && b.right>0 && b.left<innerWidth && b.bottom>0 && b.top<innerHeight) return Number(e.getAttribute('data-source-page')) || 0;
+    }
+    return 0;
+  }
+  window.ReadX = Object.freeze({sourcePage,selection,selectionInfo,markAt,viewportAnchor,marks,navigate,
     interactiveAt(x,y) { const e=document.elementFromPoint(x,y); return !!(e && e.closest('a,[data-readx-mark]')); },
     clearSelection() { const s=window.getSelection(); if(s) s.removeAllRanges(); },
     metrics() { return {width:innerWidth,height:innerHeight,pages:Math.max(1,Math.ceil((document.documentElement.scrollWidth-innerWidth)/innerWidth-.01)+1)}; }

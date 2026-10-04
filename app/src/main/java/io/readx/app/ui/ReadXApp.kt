@@ -26,13 +26,11 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -62,6 +60,7 @@ fun ReadXApp(vm: LibraryViewModel) {
     val busy by vm.busy.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    var readerChrome by remember { mutableStateOf(false) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchBook by remember { mutableStateOf<String?>(null) }
@@ -69,30 +68,43 @@ fun ReadXApp(vm: LibraryViewModel) {
     val context = LocalContext.current
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { if (it.isNotEmpty()) vm.import(it) }
     fun open(book: Book) {
-        if (book.format == "PDF") context.startActivity(Intent(context, PdfActivity::class.java).putExtra("bookId", book.id)) else vm.open(book)
+        if (book.format == "PDF" && settings.pdfToEpubEnabled) vm.convertPdf(book) else if (book.format == "PDF") context.startActivity(Intent(context, PdfActivity::class.java).putExtra("bookId", book.id)) else vm.open(book)
     }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
     ReadXTheme(settings,reading=session!=null) {
-        Scaffold(contentWindowInsets = WindowInsets.safeDrawing, snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = if (session == null) 88.dp else 112.dp)) }) { outer ->
-            Box(Modifier.fillMaxSize().padding(outer).consumeWindowInsets(outer)) {
-                if (session == null) {
-                    LibraryScreen(
-                        books = books, annotations = annotations, repository = vm.repository, busy = busy, selectedTab = selectedTab,
-                        import = { importer.launch(arrayOf("application/epub+zip", "text/plain", "application/pdf", "application/octet-stream")) },
-                        sample = vm::sample, open = ::open,
-                        search = { searchBook = null; searchOpen = true },
-                        settings = { showSettings = true },
-                        selectTab = { tab -> selectedTab = tab },
-                        edit = vm::edit, delete = vm::delete, openAnnotation = { annotation ->
-                            val book=books.firstOrNull { it.id==annotation.bookId }
-                            if(book?.format=="PDF") context.startActivity(Intent(context,PdfActivity::class.java).putExtra("bookId",book.id).putExtra("page",annotation.chapter))
-                            else vm.openAnnotation(annotation)
-                        }, removeAnnotation = vm::deleteAnnotation, editAnnotation = vm::updateAnnotation,
-                        readerSettings = settings, updateSettings = vm.preferences::update,
-                    )
-                } else ImmersiveReaderScreen(session!!, settings, vm, { showSettings = true }, { searchBook = session!!.book.id; searchOpen = true })
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val wide = maxWidth >= ReadXDesign.railBreakpoint
+            // The compact navigation bar owns the bottom system inset; it must paint through the handle area.
+            // Reader and wide layouts keep their original safe viewport. IME is consumed once at this level.
+            val contentInsets = if (session == null && !wide) WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                .union(WindowInsets.ime.only(WindowInsetsSides.Bottom)) else WindowInsets.safeDrawing
+            val snackbarClearance = if (session != null) 112.dp else if (wide) 16.dp else 80.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+            Scaffold(contentWindowInsets = contentInsets, snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = snackbarClearance)) }) { outer ->
+                Box(Modifier.fillMaxSize().padding(outer).consumeWindowInsets(outer)) {
+                    if (session == null) {
+                        LibraryScreen(
+                            books = books, annotations = annotations, repository = vm.repository, busy = busy, selectedTab = selectedTab,
+                            import = { importer.launch(arrayOf("application/epub+zip", "text/plain", "application/pdf", "application/octet-stream")) },
+                            sample = vm::sample, open = ::open,
+                            search = { searchBook = null; searchOpen = true },
+                            settings = { showSettings = true },
+                            selectTab = { tab -> selectedTab = tab },
+                            edit = vm::edit, delete = vm::delete, openAnnotation = { annotation ->
+                                val book=books.firstOrNull { it.id==annotation.bookId }
+                                if(book?.format=="PDF") context.startActivity(Intent(context,PdfActivity::class.java).putExtra("bookId",book.id).putExtra("page",annotation.chapter))
+                                else vm.openAnnotation(annotation)
+                            }, removeAnnotation = vm::deleteAnnotation, editAnnotation = vm::updateAnnotation,
+                            readerSettings = settings, updateSettings = vm.preferences::update, conversionSettings = { PdfConversionSettings(vm) },
+                        )
+                    } else ImmersiveReaderScreen(session!!, settings, vm, { showSettings = true }, { searchBook = session!!.book.id; searchOpen = true }, { readerChrome = it })
+                }
             }
+            val navigationColor = if (session != null) {
+                if (readerChrome) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.background
+            } else if (wide) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceContainer
+            SystemNavigationProtection(navigationColor, Modifier.align(Alignment.BottomCenter))
         }
+        PdfConversionDialog(vm)
         if (showSettings) SettingsSheet(settings, vm.preferences::update, vm.preferences::reset) { showSettings = false }
         if (searchOpen) SearchDialog(vm, searchBook) { searchOpen = false; vm.search("") }
     }
@@ -104,7 +116,7 @@ private fun LibraryScreen(
     open: (Book) -> Unit, search: () -> Unit, settings: () -> Unit, selectTab: (Int) -> Unit,
     edit: (Book, String, String, String) -> Any, delete: (Book) -> Any,
     openAnnotation: (Annotation) -> Unit, removeAnnotation: (Annotation) -> Any, editAnnotation: (Annotation,String) -> Any,
-    readerSettings: ReaderSettings, updateSettings: (ReaderSettings) -> Unit,
+    readerSettings: ReaderSettings, updateSettings: (ReaderSettings) -> Unit, conversionSettings: @Composable () -> Unit,
 ) {
     var filter by rememberSaveable { mutableStateOf("全部") }
     var query by rememberSaveable { mutableStateOf("") }
@@ -114,80 +126,122 @@ private fun LibraryScreen(
     val filtered = books.filter { (filter == "全部" || it.format == filter) && (query.isBlank() || (it.title + it.author + it.tags).contains(query, true)) }
     val recent = books.filter { it.lastReadAt > 0 }.sortedByDescending { it.lastReadAt }
     val showHome = selectedTab == 0
-    Scaffold(
-        contentWindowInsets = WindowInsets(0),
-        topBar = {
-            TopAppBar(windowInsets = WindowInsets(0), title = { Text("ReadX", fontSize = 34.sp, fontWeight = FontWeight.Bold) }, actions = {
-                IconButton(onClick = search) { Icon(Icons.Rounded.Search, "全文搜索") }
-                IconButton(onClick = import, enabled = !busy) {
-                    if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    else Icon(Icons.Rounded.Add, "导入书籍")
-                }
-                Box {
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "书架操作") }
-                    DropdownMenu(menu, { menu = false }) {
-                        DropdownMenuItem(text = { Text("导入书籍") }, enabled = !busy, onClick = { menu = false; import() })
-                        DropdownMenuItem(text = { Text("导入示例") }, enabled = !busy, onClick = { menu = false; sample() })
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val wide = maxWidth >= ReadXDesign.railBreakpoint
+        Row(Modifier.fillMaxSize()) {
+            if (wide) {
+                NavigationRail(modifier = Modifier.fillMaxHeight().testTag("library-rail"),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    header = { Icon(Icons.AutoMirrored.Rounded.MenuBook, null, Modifier.padding(vertical = 16.dp), tint = MaterialTheme.colorScheme.primary) }) {
+                    Spacer(Modifier.height(24.dp))
+                    LibraryDestinations.forEachIndexed { tab, destination ->
+                        NavigationRailItem(selected = selectedTab == tab, onClick = { selectTab(tab) },
+                            icon = { Icon(destination.first, null) }, label = { Text(destination.second) })
                     }
-                }
-            })
-        },
-        bottomBar = {
-            NavigationBar(windowInsets = WindowInsets(0), containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
-                listOf(
-                    Triple(Icons.Rounded.Home, "首页", 0),
-                    Triple(Icons.Rounded.CollectionsBookmark, "书库", 1),
-                    Triple(Icons.Rounded.EditNote, "批注", 2),
-                    Triple(Icons.Rounded.Settings, "设置", 3),
-                ).forEach { (icon, label, tab) ->
-                    NavigationBarItem(selected = selectedTab == tab, onClick = { selectTab(tab) }, icon = { Icon(icon, null) }, label = { Text(label) }, colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent, selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary))
                 }
             }
-        },
-
-    ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            if (selectedTab == 2) {
-                item { Text("批注", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-                if (annotations.isEmpty()) item { EmptySection("暂无批注；阅读时长按选中文字，或添加位置书签。") }
-                annotations.groupBy { it.bookId }.forEach { (bookId, marks) ->
-                    val book=books.firstOrNull { it.id==bookId }
-                    item(key="annotation-book-$bookId") { Text("${book?.title ?: "书籍"} · ${marks.size} 条", style=MaterialTheme.typography.titleMedium) }
-                    items(marks,key={it.id}) { mark ->
-                        AnnotationCard(mark, { openAnnotation(mark) }, { removeAnnotation(mark) }, { note -> editAnnotation(mark,note) })
-                    }
-                }
-            } else if (selectedTab == 3) {
-                item { Text("设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-                item { Card(onClick = settings, shape = RoundedCornerShape(22.dp)) { ListItem(headlineContent = { Text("阅读设置") }, supportingContent = { Text("分页与滚动、主题、字号与行距") }, leadingContent = { Icon(Icons.Rounded.Tune, null) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent)) } }
-                item { AppThemeOptions(readerSettings, updateSettings) }
-                item { Text("ReadX · 本地阅读\nEPUB / TXT / PDF", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(18.dp)) }
-            } else {
-                if (showHome && recent.isNotEmpty()) {
-                    item { Text("继续阅读", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, start = 2.dp)) }
-                    item {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(horizontal = 2.dp)) {
-                            items(recent.take(8), key = { it.id }) { book -> ContinueCard(book, repository, { open(book) }, { editing = book }, { removing = book }) }
+            Scaffold(
+                modifier = Modifier.weight(1f), contentWindowInsets = WindowInsets(0),
+                containerColor = MaterialTheme.colorScheme.surface,
+                topBar = {
+                    TopAppBar(windowInsets = WindowInsets(0),
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+                        title = { Text("ReadX", style = MaterialTheme.typography.headlineLarge) }, actions = {
+                            IconButton(onClick = search) { Icon(Icons.Rounded.Search, "全文搜索") }
+                            FilledTonalIconButton(onClick = import, enabled = !busy) {
+                                if (busy) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.Rounded.Add, "导入书籍")
+                            }
+                            Box {
+                                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "书架操作") }
+                                DropdownMenu(menu, { menu = false }) {
+                                    DropdownMenuItem(text = { Text("导入书籍") }, leadingIcon = { Icon(Icons.Rounded.Add, null) }, enabled = !busy, onClick = { menu = false; import() })
+                                    DropdownMenuItem(text = { Text("导入示例") }, leadingIcon = { Icon(Icons.AutoMirrored.Rounded.MenuBook, null) }, enabled = !busy, onClick = { menu = false; sample() })
+                                }
+                            }
+                        })
+                },
+                bottomBar = {
+                    if (!wide) NavigationBar(windowInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+                        modifier = Modifier.testTag("library-navigation"),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp) {
+                        LibraryDestinations.forEachIndexed { tab, destination ->
+                            NavigationBarItem(selected = selectedTab == tab, onClick = { selectTab(tab) },
+                                icon = { Icon(destination.first, null) }, label = { Text(destination.second) })
                         }
                     }
-                }
-                item { Text(if (showHome) "书库" else "全部书籍", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp, start = 2.dp)) }
-                if (books.isEmpty()) {
-                    item { EmptySection("暂无书籍") }
-                } else {
-                    if (!showHome) item {
-                        Column {
-                            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), placeholder = { Text("书名、作者或标签") }, singleLine = true,
-                                leadingIcon = { Icon(Icons.Rounded.FilterList, null) }, shape = RoundedCornerShape(22.dp))
-                            Spacer(Modifier.height(4.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("全部", "EPUB", "TXT", "PDF").forEach { value ->
-                                FilterChip(selected = filter == value, onClick = { filter = value }, label = { Text(value) })
-                            } }
+                },
+            ) { padding ->
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+                    LazyColumn(Modifier.widthIn(max = ReadXDesign.contentWidth).fillMaxHeight().fillMaxWidth().testTag("library-list"),
+                        contentPadding = PaddingValues(start = ReadXDesign.gutter, end = ReadXDesign.gutter, top = 16.dp, bottom = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(ReadXDesign.gap)) {
+                        if (selectedTab == 2) {
+                            item { SectionHeading("批注", "${annotations.size} 条") }
+                            if (annotations.isEmpty()) item { EmptySection("暂无批注", "阅读时长按选中文字，或添加位置书签。", Icons.Rounded.EditNote) }
+                            annotations.groupBy { it.bookId }.forEach { (bookId, marks) ->
+                                val book = books.firstOrNull { it.id == bookId }
+                                item(key = "annotation-book-$bookId") { Text("${book?.title ?: "书籍"} · ${marks.size} 条", style = MaterialTheme.typography.titleMedium) }
+                                items(marks, key = { it.id }) { mark ->
+                                    AnnotationCard(mark, { openAnnotation(mark) }, { removeAnnotation(mark) }, { note -> editAnnotation(mark, note) })
+                                }
+                            }
+                        } else if (selectedTab == 3) {
+                            item { SectionHeading("设置") }
+                            item {
+                                Card(onClick = settings, shape = MaterialTheme.shapes.large,
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                                    ListItem(headlineContent = { Text("阅读设置", style = MaterialTheme.typography.titleMedium) },
+                                        supportingContent = { Text("分页与滚动、主题、字号与行距") },
+                                        leadingContent = { Icon(Icons.Rounded.Tune, null) },
+                                        trailingContent = { Icon(Icons.Rounded.ChevronRight, null) },
+                                        colors = ListItemDefaults.colors(containerColor = Color.Transparent,
+                                            headlineColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            supportingColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            leadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            trailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer))
+                                }
+                            }
+                            item { SettingsGroup { AppThemeOptions(readerSettings, updateSettings) } }
+                            item { SettingsGroup { conversionSettings() } }
+                            item { Text("ReadX · 本地阅读\nEPUB / TXT / PDF", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
+                        } else {
+                            if (showHome && recent.isNotEmpty()) {
+                                item { SectionHeading("继续阅读") }
+                                item {
+                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                        items(recent.take(8), key = { it.id }) { book -> ContinueCard(book, repository, { open(book) }, { editing = book }, { removing = book }) }
+                                    }
+                                }
+                            }
+                            item { SectionHeading(if (showHome) "书库" else "全部书籍", "${books.size} 本") }
+                            if (books.isEmpty()) {
+                                item { EmptySection("暂无书籍", "导入 EPUB、TXT 或 PDF，开始阅读。", Icons.AutoMirrored.Rounded.MenuBook,
+                                    if (busy) "导入中…" else "导入书籍", import, !busy) }
+                            } else {
+                                if (!showHome) item {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), placeholder = { Text("书名、作者或标签") }, singleLine = true,
+                                            leadingIcon = { Icon(Icons.Rounded.Search, null) }, shape = MaterialTheme.shapes.large)
+                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            listOf("全部", "EPUB", "TXT", "PDF").forEach { value ->
+                                                FilterChip(selected = filter == value, onClick = { filter = value }, label = { Text(value) },
+                                                    leadingIcon = if (filter == value) { { Icon(Icons.Rounded.Check, null, Modifier.size(18.dp)) } } else null)
+                                            }
+                                        }
+                                    }
+                                }
+                                // Home never inherits a hidden search/filter from the library destination.
+                                val visible = if (showHome) books else filtered
+                                if (visible.isEmpty()) item { EmptySection("没有匹配的书籍", "试试其他关键词或格式。", Icons.Rounded.Search) }
+                                items(visible, key = { it.id }) { book -> BookCard(book, repository, { open(book) }, { editing = book }, { removing = book }) }
+                                item { Text("${visible.size} 本书", Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    style = MaterialTheme.typography.labelMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            }
                         }
                     }
-                    if (filtered.isEmpty()) item { Text("没有匹配的书籍", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(filtered, key = { it.id }) { book -> BookCard(book, repository, { open(book) }, { editing = book }, { removing = book }) }
-                    item { Text("${filtered.size} 本书", Modifier.fillMaxWidth().padding(vertical = 4.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
             }
         }
@@ -197,29 +251,66 @@ private fun LibraryScreen(
         confirmButton = { TextButton(onClick = { delete(book); removing = null }) { Text("移除") } }, dismissButton = { TextButton(onClick = { removing = null }) { Text("取消") } }) }
 }
 
+private val LibraryDestinations = listOf(
+    Icons.Rounded.Home to "首页", Icons.Rounded.CollectionsBookmark to "书库",
+    Icons.Rounded.EditNote to "批注", Icons.Rounded.Settings to "设置",
+)
+
 @Composable
-private fun EmptySection(text: String) {
-    Box(Modifier.fillMaxWidth().padding(vertical = 96.dp), contentAlignment = Alignment.Center) { Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+private fun EmptySection(title: String, description: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
+    actionLabel: String? = null, action: () -> Unit = {}, enabled: Boolean = true) {
+    Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.secondaryContainer) {
+                Icon(icon, null, Modifier.padding(20.dp).size(32.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            if (actionLabel != null) Button(onClick = action, enabled = enabled) { Text(actionLabel) }
+        }
+    }
 }
 
 @Composable
-private fun ContinueCard(book: Book, repository: LibraryRepository, open: () -> Unit, edit: () -> Unit, remove: () -> Unit) {
+private fun BookMenu(edit: () -> Unit, remove: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    val progress = book.progress()?.let { "$it%" } ?: "第 ${book.chapterIndex + 1} 页"
-    Card(onClick = open, modifier = Modifier.width(280.dp).height(110.dp), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)) {
-        Row(Modifier.fillMaxSize().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Cover(book, repository, Modifier.width(50.dp).height(78.dp))
-            Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                Text(book.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(5.dp)); Text(book.author.ifBlank { "未知作者" }, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha=.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(8.dp)); Text("${book.format} · $progress", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha=.8f))
-            }
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreHoriz, "书籍操作") }
-                DropdownMenu(menu, { menu = false }) {
-                    DropdownMenuItem(text = { Text("编辑信息与标签") }, onClick = { menu = false; edit() })
-                    DropdownMenuItem(text = { Text("移除书籍") }, onClick = { menu = false; remove() })
+    Box {
+        IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreHoriz, "书籍操作") }
+        DropdownMenu(menu, { menu = false }) {
+            DropdownMenuItem(text = { Text("编辑信息与标签") }, leadingIcon = { Icon(Icons.Rounded.Edit, null) }, onClick = { menu = false; edit() })
+            DropdownMenuItem(text = { Text("移除书籍") }, leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null) }, onClick = { menu = false; remove() })
+        }
+    }
+}
+
+private fun Book.progressLabel(): String = progress()?.let {
+    if (format == "PDF") "$it%" else "约 $it%"
+} ?: "第 ${chapterIndex + 1} 页"
+
+@Composable
+private fun ContinueCard(book: Book, repository: LibraryRepository, open: () -> Unit, edit: () -> Unit, remove: () -> Unit) {
+    Card(onClick = open, modifier = Modifier.width(304.dp), shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Cover(book, repository, Modifier.width(48.dp).height(72.dp))
+                Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                    Text(book.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(book.author.ifBlank { "未知作者" }, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+                BookMenu(edit, remove)
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("${book.format} · ${book.progressLabel()}", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                Text("继续阅读", style = MaterialTheme.typography.labelLarge)
+                Icon(Icons.Rounded.ChevronRight, null, Modifier.size(20.dp))
+            }
+            book.progress()?.let { progress ->
+                LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .12f))
             }
         }
     }
@@ -227,22 +318,17 @@ private fun ContinueCard(book: Book, repository: LibraryRepository, open: () -> 
 
 @Composable
 private fun BookCard(book: Book, repository: LibraryRepository, open: () -> Unit, edit: () -> Unit, remove: () -> Unit) {
-    var menu by remember { mutableStateOf(false) }
-    Card(onClick = open, shape = RoundedCornerShape(22.dp), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Cover(book, repository, Modifier.width(50.dp).height(78.dp))
-            Column(Modifier.weight(1f).padding(start = 16.dp)) {
-                Text(book.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(4.dp)); Text(book.author.ifBlank { "未知作者" }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(4.dp)); Text(book.progress()?.let { "$it%" } ?: "第 ${book.chapterIndex + 1} 页", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Card(onClick = open, shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Cover(book, repository, Modifier.width(48.dp).height(72.dp))
+            Column(Modifier.weight(1f).padding(start = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(book.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(book.author.ifBlank { "未知作者" }, style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${book.format} · ${book.progressLabel()}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreHoriz, "书籍操作") }
-                DropdownMenu(menu, { menu = false }) {
-                    DropdownMenuItem(text = { Text("编辑信息与标签") }, onClick = { menu = false; edit() })
-                    DropdownMenuItem(text = { Text("移除书籍") }, onClick = { menu = false; remove() })
-                }
-            }
+            BookMenu(edit, remove)
         }
     }
 }
@@ -252,12 +338,15 @@ private fun Cover(book: Book, repository: LibraryRepository, modifier: Modifier)
     val bitmap by produceState<android.graphics.Bitmap?>(null, book.id, book.coverPath) { value = repository.cover(book) }
     val image = bitmap
     if (image != null) {
-        Image(image.asImageBitmap(), "${book.title} 封面", modifier.clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Fit)
+        Image(image.asImageBitmap(), "${book.title} 封面", modifier.clip(MaterialTheme.shapes.small), contentScale = ContentScale.Fit)
         return
     }
-    val coverColor = when(book.format) { "PDF" -> Color(0xFFCFD7D2); "EPUB" -> Color(0xFFDCD7C4); else -> Color(0xFFD7DFD0) }
-    Box(modifier.background(Brush.linearGradient(listOf(coverColor, coverColor.copy(alpha = .68f))), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.AutoMirrored.Rounded.MenuBook, null, Modifier.size(28.dp), tint = Color(0xFF445449)); Spacer(Modifier.height(8.dp)); Text(book.format, style = MaterialTheme.typography.labelSmall, color = Color(0xFF445449)) }
+    Box(modifier.background(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.shapes.small), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.AutoMirrored.Rounded.MenuBook, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            Spacer(Modifier.height(8.dp))
+            Text(book.format, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
     }
 }
 
@@ -297,17 +386,17 @@ internal fun AppThemeOptions(settings: ReaderSettings, update: (ReaderSettings) 
     var custom by remember {mutableStateOf(false)}
     var hex by remember(settings.customAccent) {mutableStateOf(settings.customAccent.removePrefix("#"))}
     val dynamicSupported=android.os.Build.VERSION.SDK_INT>=31
-    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Text("应用主题",style=MaterialTheme.typography.titleMedium)
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {Text("动态取色");Text(if(dynamicSupported) "开启：完整使用系统壁纸色；关闭：使用下方主题色。" else "当前系统不支持动态取色，使用所选主题色。",style=MaterialTheme.typography.bodySmall)}
-            Switch(settings.dynamicColors,{update(settings.copy(dynamicColors=it))},enabled=dynamicSupported)
+            Column(Modifier.weight(1f)) {Text("动态取色");Text(if(dynamicSupported) "开启：完整使用系统壁纸色；关闭：使用下方主题色。" else "当前系统不支持动态取色，使用所选主题色。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+            Switch(settings.dynamicColors,{update(settings.copy(dynamicColors=it))},modifier=Modifier.testTag("dynamic-colors-switch"),enabled=dynamicSupported)
         }
         FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            ThemeAccent.entries.forEach {accent->FilterChip(selected=accent==settings.accent && settings.customAccent.isBlank(),onClick={update(settings.copy(accent=accent,customAccent=""))},enabled=!(settings.dynamicColors && dynamicSupported),label={Text(accent.label)})}
+            ThemeAccent.entries.forEach {accent->FilterChip(selected=accent==settings.accent && settings.customAccent.isBlank(),onClick={update(settings.copy(accent=accent,customAccent=""))},enabled=!(settings.dynamicColors && dynamicSupported),label={Text(accent.label)},leadingIcon={Box(Modifier.size(16.dp).background(Color(accent.light), androidx.compose.foundation.shape.CircleShape))})}
             FilterChip(selected=settings.customAccent.isNotBlank(),onClick={custom=true},enabled=!(settings.dynamicColors && dynamicSupported),label={Text("自定义")})
         }
-        Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=RoundedCornerShape(16.dp),modifier=Modifier.fillMaxWidth().padding(top=12.dp)) {
+        Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=MaterialTheme.shapes.medium,modifier=Modifier.fillMaxWidth().padding(top=8.dp)) {
             Column(Modifier.padding(16.dp)) {
                 Text("当前主题预览",color=MaterialTheme.colorScheme.onPrimaryContainer,style=MaterialTheme.typography.titleSmall)
                 Text("强调色 #${"%06X".format(MaterialTheme.colorScheme.primary.toArgb() and 0xFFFFFF)}",color=MaterialTheme.colorScheme.onPrimaryContainer,style=MaterialTheme.typography.bodySmall)
@@ -316,6 +405,8 @@ internal fun AppThemeOptions(settings: ReaderSettings, update: (ReaderSettings) 
         }
     }
     if(custom) AlertDialog(onDismissRequest={custom=false},title={Text("自定义主题色")},text={Column {
+        Text("输入主题种子色；系统会生成适合浅色与深色界面的色调。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
         OutlinedTextField(hex,{hex=it.filter {c->c in "0123456789abcdefABCDEF"}.take(6)},label={Text("RGB 十六进制，例如 7756AE")},prefix={Text("#")},singleLine=true)
         if(hex.length==6) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(40.dp).background(Color(("FF"+hex).toLong(16)),RoundedCornerShape(8.dp)))
     }},confirmButton={TextButton(onClick={update(settings.copy(customAccent="#${hex.uppercase()}"));custom=false},enabled=hex.length==6) {Text("应用")}},dismissButton={TextButton(onClick={custom=false}) {Text("取消")}})
@@ -328,27 +419,52 @@ private fun SettingsSheet(settings: ReaderSettings, update: (ReaderSettings) -> 
     var lineHeight by remember(settings.lineHeight) {mutableFloatStateOf(settings.lineHeight)}
     var margin by remember(settings.margin) {mutableFloatStateOf(settings.margin)}
     val latest by rememberUpdatedState(settings)
-    ModalBottomSheet(onDismissRequest = dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 28.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("阅读设置", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold); TextButton(onClick = { confirmReset = true }) { Text("重置") }; TextButton(onClick = dismiss) { Text("完成") } }
-            Spacer(Modifier.height(14.dp))
-            Text("阅读方式", style = MaterialTheme.typography.labelLarge)
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ReadingLayout.entries.forEach { layout -> FilterChip(selected = layout == settings.layout, onClick = { update(settings.copy(layout = layout)) }, label = { Text(layout.label) }) } }
-            Spacer(Modifier.height(12.dp))
-            Text("PDF 阅读方式", style = MaterialTheme.typography.labelLarge)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PdfReadingLayout.entries.forEach { layout -> FilterChip(selected=layout==settings.pdfLayout,onClick={update(settings.copy(pdfLayout=layout))},label={Text(layout.label)}) } }
-            Spacer(Modifier.height(12.dp))
-            Text("主题", style = MaterialTheme.typography.labelLarge)
-            Spacer(Modifier.height(6.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ReadingTheme.entries.forEach { theme -> FilterChip(selected = theme == settings.theme, onClick = { update(settings.copy(theme = theme)) }, label = { Text(theme.label) }) } }
-            Spacer(Modifier.height(12.dp)); Text("字号  ${fontSize.toInt()} sp", style = MaterialTheme.typography.labelLarge)
-            Slider(fontSize,{fontSize=it},modifier=Modifier.testTag("font-size-slider"),onValueChangeFinished={update(latest.copy(fontSize=fontSize))},valueRange=14f..32f,steps=17)
-            Text("行距  ${"%.1f".format(lineHeight)}", style = MaterialTheme.typography.labelLarge)
-            Slider(lineHeight,{lineHeight=it},onValueChangeFinished={update(latest.copy(lineHeight=lineHeight))},valueRange=1.2f..2.6f,steps=13)
-            Text("页边距  ${margin.toInt()}", style = MaterialTheme.typography.labelLarge)
-            Slider(margin,{margin=it},onValueChangeFinished={update(latest.copy(margin=margin))},valueRange=12f..48f,steps=8)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text("使用衬线字体", style = MaterialTheme.typography.bodyLarge); Switch(settings.serif, { update(settings.copy(serif = it)) }) }
+    ModalBottomSheet(onDismissRequest = dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxWidth().testTag("reading-settings-sheet").verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("阅读设置", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                TextButton(onClick = { confirmReset = true }) { Text("重置") }
+                TextButton(onClick = dismiss) { Text("完成") }
+            }
+            SettingsGroup {
+                Text("阅读方式", style = MaterialTheme.typography.titleMedium)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    ReadingLayout.entries.forEachIndexed { i, layout ->
+                        SegmentedButton(selected = layout == settings.layout, onClick = { update(settings.copy(layout = layout)) },
+                            shape = SegmentedButtonDefaults.itemShape(i, ReadingLayout.entries.size)) { Text(layout.label) }
+                    }
+                }
+                Text("PDF 阅读方式", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PdfReadingLayout.entries.forEach { layout -> FilterChip(selected = layout == settings.pdfLayout,
+                        onClick = { update(settings.copy(pdfLayout = layout)) }, label = { Text(layout.label) }) }
+                }
+            }
+            SettingsGroup {
+                Text("主题", style = MaterialTheme.typography.titleMedium)
+                Text("仅改变阅读纸张，应用主题色可在设置页单独调整。", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReadingTheme.entries.forEach { theme -> FilterChip(selected = theme == settings.theme,
+                        onClick = { update(settings.copy(theme = theme)) }, label = { Text(theme.label) }) }
+                }
+            }
+            SettingsGroup {
+                Text("文字排版", style = MaterialTheme.typography.titleMedium)
+                Text("字号  ${fontSize.toInt()} sp", style = MaterialTheme.typography.labelLarge)
+                Slider(fontSize, { fontSize = it }, modifier = Modifier.testTag("font-size-slider"),
+                    onValueChangeFinished = { update(latest.copy(fontSize = fontSize)) }, valueRange = 14f..32f, steps = 17)
+                Text("行距  ${"%.1f".format(lineHeight)}", style = MaterialTheme.typography.labelLarge)
+                Slider(lineHeight, { lineHeight = it }, onValueChangeFinished = { update(latest.copy(lineHeight = lineHeight)) }, valueRange = 1.2f..2.6f, steps = 13)
+                Text("页边距  ${margin.toInt()}", style = MaterialTheme.typography.labelLarge)
+                Slider(margin, { margin = it }, onValueChangeFinished = { update(latest.copy(margin = margin)) }, valueRange = 12f..48f, steps = 8)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text("使用衬线字体", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    Switch(settings.serif, { update(settings.copy(serif = it)) })
+                }
+            }
         }
     }
     if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false },
@@ -370,7 +486,7 @@ private fun MetadataDialog(book: Book, save: (String, String, String) -> Unit, d
 private fun SearchDialog(vm: LibraryViewModel, bookId: String?, dismiss: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }; val hits by vm.hits.collectAsStateWithLifecycle(); val searching by vm.searching.collectAsStateWithLifecycle()
     LaunchedEffect(query, bookId) { vm.search(query, bookId) }
-    Dialog(onDismissRequest = dismiss) { Surface(shape = RoundedCornerShape(28.dp), tonalElevation = 3.dp) { Column(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 620.dp).padding(20.dp)) {
+    Dialog(onDismissRequest = dismiss) { Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerHigh) { Column(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 620.dp).padding(20.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(if (bookId == null) "全文搜索" else "书内搜索", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); IconButton(onClick = dismiss) { Icon(Icons.Rounded.Close, "关闭搜索") } }
         OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), placeholder = { Text("输入正文关键词") }, singleLine = true, shape = RoundedCornerShape(18.dp)); Spacer(Modifier.height(12.dp))
         Text("当前搜索 EPUB / TXT 正文，最多显示 100 条。PDF 请使用阅读页内搜索。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.height(12.dp))

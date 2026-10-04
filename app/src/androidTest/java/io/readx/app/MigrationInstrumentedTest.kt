@@ -9,6 +9,7 @@ import io.readx.app.data.LibraryDatabase
 import io.readx.app.data.MIGRATION_1_2
 import io.readx.app.data.MIGRATION_2_3
 import io.readx.app.data.MIGRATION_3_4
+import io.readx.app.data.MIGRATION_4_5
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -39,7 +40,7 @@ class MigrationInstrumentedTest {
                 old.execSQL("INSERT INTO chapters (bookId,ordinal,title,href,text) VALUES ('test-id',0,'第一章','chapter.html','正文')")
                 old.version = 1
             }
-            val db = Room.databaseBuilder(app, LibraryDatabase::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+            val db = Room.databaseBuilder(app, LibraryDatabase::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,MIGRATION_4_5).build()
             try {
                 val book = db.library().book("test-id")!!
                 assertEquals("旧书", book.title)
