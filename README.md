@@ -119,7 +119,7 @@ adb devices
 - `conversion/`：PDF→EPUB、任务状态、检查点和本地 OCR。
 - `ui/`：Compose 界面、主题、设置及 ViewModel。
 
-详见 [架构](docs/ARCHITECTURE.md)、[设计](docs/DESIGN.md)、[路线](docs/ROADMAP.md)、[验证记录](docs/TESTING.md)、[贡献指南](CONTRIBUTING.md)。历史验证是指定设备/版本的记录，不代表所有场景或本次发布全部重新测试。
+详见 [架构](docs/ARCHITECTURE.md)、[设计](docs/DESIGN.md)、[To Do](docs/ROADMAP.md)、[贡献指南](CONTRIBUTING.md)。历史验证是指定设备/版本的记录，不代表所有场景或本次发布全部重新测试。
 
 ## 许可证与致谢
 
