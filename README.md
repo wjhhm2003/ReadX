@@ -7,7 +7,7 @@
 **一款离线的 Android 本地阅读器。** 支持 EPUB、TXT、PDF；原生 Kotlin + Jetpack Compose + Material 3 Expressive，无账号、无广告；阅读与转换离线，模型在线下载需主动开启。
 
 > [!IMPORTANT]
-> 本项目为一个 AI 开发的项目，代码、架构及文档主要由 `gpt-6.1-sol Codex` 生成。欢迎提出改进建议或参与测试。
+> 本项目为一个 AI 开发的项目，代码、架构及文档主要由 `gpt-6.1-sol Harness: Codex` 生成。欢迎提出Issue或PR。
 
 [下载预览版](https://github.com/wjhhm2003/ReadX/releases)   [第三方声明](docs/THIRD_PARTY.md)  [MIT 许可证](LICENSE)
 
