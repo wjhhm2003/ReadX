@@ -55,6 +55,69 @@ class NativeReaderView(context:Context):View(context) {
     private var scroll=0f
     private var savedOffset=0
     private var downX=0f;private var downY=0f;private var lastY=0f
+    private val scroller = android.widget.OverScroller(context)
+    private var velocityTracker: android.view.VelocityTracker? = null
+    private val minFlingVelocity = android.view.ViewConfiguration.get(context).scaledMinimumFlingVelocity
+    private val maxFlingVelocity = android.view.ViewConfiguration.get(context).scaledMaximumFlingVelocity
+    private var lastFlingY = 0
+
+    private val flingRunnable = object : Runnable {
+        override fun run() {
+            if (scroller.computeScrollOffset()) {
+                val currY = scroller.currY
+                val deltaY = (currY - lastFlingY).toFloat()
+                lastFlingY = currY
+                val canContinue = applyScrollDelta(deltaY)
+                if (canContinue && !scroller.isFinished) {
+                    postOnAnimation(this)
+                } else {
+                    scroller.forceFinished(true)
+                    report()
+                }
+            } else {
+                report()
+            }
+        }
+    }
+
+    private fun applyScrollDelta(deltaY: Float): Boolean {
+        scroll += deltaY
+        val p = current ?: return false
+        val e = engine ?: return false
+        if (scroll < -p.layout.height && neighbour != null) {
+            current = neighbour
+            neighbour = null
+            scroll += p.layout.height
+            report()
+            prefetch()
+            updateMarks(annotationRows)
+        } else if (scroll > 0 && p.start > 0 && operation?.isActive != true) {
+            val y = scroll
+            operation = scope.launch {
+                val prev = e.previous(p.start)
+                current = prev
+                neighbour = p
+                scroll = y - prev.layout.height
+                report()
+                invalidate()
+                updateMarks(annotationRows)
+            }
+        } else if (p.start == 0 && scroll > 0) {
+            scroll = 0f
+            invalidate()
+            return false
+        }
+        if (p.end == e.source.length) {
+            val minScroll = minOf(0f, height - e.top * 2 - p.layout.height)
+            if (scroll <= minScroll) {
+                scroll = minScroll
+                invalidate()
+                return false
+            }
+        }
+        invalidate()
+        return true
+    }
     private var flashRange:Pair<Int,Int>?=null
     private var flashJob:Job?=null
     private var selectionUnit=SelectionUnit.WORD
@@ -224,7 +287,16 @@ class NativeReaderView(context:Context):View(context) {
     override fun performClick():Boolean {super.performClick();return true}
     override fun onTouchEvent(event:MotionEvent):Boolean {
         NativeWork.foreground()
-        if(event.actionMasked==MotionEvent.ACTION_DOWN) {pendingJumpPage=null;downX=event.x;downY=event.y;lastY=event.y
+        if (!paged) {
+            if (velocityTracker == null) velocityTracker = android.view.VelocityTracker.obtain()
+            velocityTracker?.addMovement(event)
+        }
+        if(event.actionMasked==MotionEvent.ACTION_DOWN) {
+            pendingJumpPage=null;downX=event.x;downY=event.y;lastY=event.y
+            if (!paged) {
+                scroller.forceFinished(true)
+                removeCallbacks(flingRunnable)
+            }
             val a=startSelection?.let(::point);val b=endSelection?.let(::point)
             fun near(p:Pair<Float,Float>?)=p!=null && kotlin.math.abs(event.x-p.first)<40*resources.displayMetrics.density && kotlin.math.abs(event.y-p.second)<48*resources.displayMetrics.density
             selecting=near(a)||near(b);draggingEnd=near(b);if(selecting)parent.requestDisallowInterceptTouchEvent(true)
@@ -239,19 +311,44 @@ class NativeReaderView(context:Context):View(context) {
         }
         detector.onTouchEvent(event)
         if(event.actionMasked==MotionEvent.ACTION_MOVE && !paged && kotlin.math.abs(event.y-downY)>8) {
-            scroll+=event.y-lastY;val p=current;val e=engine
-            if(p!=null && e!=null) {
-                if(scroll<-p.layout.height && neighbour!=null) {current=neighbour;neighbour=null;scroll+=p.layout.height;report();prefetch();updateMarks(annotationRows)}
-                else if(scroll>0 && p.start>0 && operation?.isActive!=true) {val y=scroll;operation=scope.launch {val prev=e.previous(p.start);current=prev;neighbour=p;scroll=y-prev.layout.height;report();invalidate();updateMarks(annotationRows)}}
-                else if(p.start==0 && scroll>0)scroll=0f
-                if(p.end==e.source.length)scroll=scroll.coerceAtLeast(minOf(0f,height-e.top*2-p.layout.height))
-            };invalidate();if(event.actionMasked==MotionEvent.ACTION_UP)report()
+            applyScrollDelta(event.y-lastY)
+            lastY=event.y
+            return true
         }
-        if(event.actionMasked==MotionEvent.ACTION_UP && !paged)report()
+        if(event.actionMasked==MotionEvent.ACTION_UP && !paged) {
+            velocityTracker?.let { tracker ->
+                tracker.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
+                val vy = tracker.yVelocity
+                if (kotlin.math.abs(vy) >= minFlingVelocity) {
+                    scroller.forceFinished(true)
+                    removeCallbacks(flingRunnable)
+                    lastFlingY = 0
+                    scroller.fling(0, 0, 0, vy.toInt(), 0, 0, Int.MIN_VALUE, Int.MAX_VALUE)
+                    postOnAnimation(flingRunnable)
+                } else {
+                    report()
+                }
+                tracker.recycle()
+                velocityTracker = null
+            } ?: report()
+        }
+        if(event.actionMasked==MotionEvent.ACTION_CANCEL && !paged) {
+            velocityTracker?.recycle()
+            velocityTracker = null
+            report()
+        }
         if(event.actionMasked==MotionEvent.ACTION_UP && paged && kotlin.math.abs(event.x-downX)>64*resources.displayMetrics.density && kotlin.math.abs(event.x-downX)>kotlin.math.abs(event.y-downY)*1.3f)turn(if(event.x<downX) 1 else -1)
         lastY=event.y;return true
     }
-    fun release() {engine?.let {e->onPosition?.invoke(savedOffset.toFloat()/e.source.length,true,pageInfo().first,pageInfo().second)};scope.cancel();engine=null}
+    fun release() {
+        removeCallbacks(flingRunnable)
+        scroller.forceFinished(true)
+        velocityTracker?.recycle()
+        velocityTracker = null
+        engine?.let {e->onPosition?.invoke(savedOffset.toFloat()/e.source.length,true,pageInfo().first,pageInfo().second)}
+        scope.cancel()
+        engine=null
+    }
 }
 
 internal fun nativeLayoutKey(session:ReaderSession,settings:ReaderSettings,w:Int,h:Int,d:Float,f:Float)=LayoutConfig(session.book.fingerprint,session.chapters.map {it.href},w,h,d,f,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,"none",android.os.Build.FINGERPRINT,android.os.LocaleList.getDefault().toLanguageTags(),"staticlayout-v3",fontId=settings.fontId).generateKey()
@@ -285,7 +382,7 @@ fun NativeTxtReader(session:ReaderSession,settings:ReaderSettings,repository:Lib
             val search=withContext(Dispatchers.IO) {session.find?.let {source.find(it,session.occurrence)}}
             val pageRequest=session.requestedPage.takeIf {v.navigationId!=session.navigationId}
             val requestedOffset=pageRequest?.let {engine.boundaries.getOrNull(it-1)}
-            val offset=requestedOffset ?: if(session.target=="__readx_end__") engine.previous(source.length).start else search?.first ?: resolved?.first ?: (session.fraction*source.length).toInt().coerceIn(0,source.length-1)
+            val offset=requestedOffset ?: if(session.target=="__readx_end__") engine.previous(source.length).start else search?.first ?: resolved?.first ?: (session.fraction*source.length).toInt().coerceIn(0,(source.length-1).coerceAtLeast(0))
             v.navigationId=session.navigationId;v.chapterOrdinal=session.chapter;v.layoutKey=key
             v.animateEntry=newNavigation && session.flashAnchor
             v.install(engine,offset)

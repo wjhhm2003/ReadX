@@ -316,7 +316,7 @@ class LocalWebReader(context: Context) : WebView(context) {
                     if(mark!=null) selectionPopup?.invoke(mark)
                     else trusted("window.ReadX.interactiveAt(${x / resources.displayMetrics.density},${y / resources.displayMetrics.density})") {interactive->
                         if(interactive=="true") trusted("(function(){var e=document.elementFromPoint(${x / resources.displayMetrics.density},${y / resources.displayMetrics.density});var a=e && e.closest('a');if(a)a.click();})()")
-                        else {selectionPopup?.invoke(null);tapZone?.invoke(if(x<width/3f) -1 else if(x>width*2/3f) 1 else 0)}
+                        else {selectionPopup?.invoke(null);tapZone?.invoke(if(!paged) 0 else if(x<width/3f) -1 else if(x>width*2/3f) 1 else 0)}
                     }
                 }
                 performClick()

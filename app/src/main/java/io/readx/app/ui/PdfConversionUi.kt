@@ -44,16 +44,34 @@ internal fun PdfConversionSettings(vm: LibraryViewModel) {
         }
         Text("开启后按需生成独立 EPUB，原 PDF 不变。复杂内容保留原图；扫描页需本地 OCR 模型，不联网、不上传。",style=MaterialTheme.typography.bodySmall)
         FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-            listOf("chi_sim+eng" to "简中＋英文","chi_tra+eng" to "繁中＋英文","eng" to "英文").forEach {(key,label)->FilterChip(settings.ocrLanguages==key,{vm.preferences.update(settings.copy(ocrLanguages=key))},{Text(label)})}
+            listOf(
+                "chi_sim+eng" to "简中＋英文",
+                "chi_tra+eng" to "繁中＋英文",
+                "chi_tra" to "繁体中文",
+                "chi_sim" to "简体中文",
+                "eng" to "英文"
+            ).forEach { (key, label) ->
+                FilterChip(settings.ocrLanguages == key, { vm.preferences.update(settings.copy(ocrLanguages = key)) }, { Text(label) })
+            }
         }
-        Text(listOf("chi_sim" to "简中","chi_tra" to "繁中","eng" to "英文").joinToString(" · ") {(key,label)->"$label：${if(models[key]!=null) "已导入" else "未导入"}"},style=MaterialTheme.typography.bodySmall)
+        val active = downloads.any { !it.state.isFinished }
+        listOf("chi_sim" to "简中", "chi_tra" to "繁中", "eng" to "英文").forEach { (key, label) ->
+            val ready = models[key] != null
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("$label（$key.traineddata）：${if (ready) "已就绪" else "未导入"}", style = MaterialTheme.typography.bodySmall)
+                if (!ready && settings.onlineModels) {
+                    TextButton(onClick = { vm.downloadModel(key) }, enabled = !active) {
+                        Text("下载${label}模型", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
         if (BuildConfig.BUNDLED_OCR) Text(bundledState, style=MaterialTheme.typography.bodySmall)
         if(bundledState.contains("失败")) TextButton(onClick={vm.retryBundledModels()}, enabled=!busy) {Text("重新部署内置模型")}
         OutlinedButton(onClick={import.launch(arrayOf("*/*"))},enabled=!busy,modifier=Modifier.testTag("import-ocr-model")) {Text(if(busy) "校验模型中…" else (if (BuildConfig.BUNDLED_OCR) "替换 / 导入 OCR 模型" else "导入 OCR 模型"))}
         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {Text("允许在线模型下载",Modifier.weight(1f));Switch(settings.onlineModels,vm::onlineModels,Modifier.testTag("online-model-switch"))}
         Text("默认关闭。仅主动下载固定版本的官方模型，校验大小和 SHA-256；不上传书籍/笔记。关闭取消未完成下载，不删除已有模型。",style=MaterialTheme.typography.bodySmall)
         val download=downloads.lastOrNull()
-        val active=downloads.any {!it.state.isFinished}
         if(settings.onlineModels) OutlinedButton(onClick=vm::downloadModels,enabled=!active) {Text(if(active) "下载/后台等待…" else "下载所选语言模型（固定版本）")}
         if(download!=null) {
             val bytes=download.progress.getLong("bytes",0);val total=download.progress.getLong("total",0)

@@ -64,7 +64,9 @@ internal class CroppedPdfSource(val document:PdfDocument?,file:File) {
     }
     suspend fun select(page:Int,a:PointF,b:PointF):PdfSelection? {
         if(document==null)return null // Basic path is explicitly region-only, regardless of newer renderer APIs.
-        val contents=document.getSelectionBounds(page,a,b)?.selectedContents?.filterIsInstance<PdfPageTextContent>().orEmpty()
+        val (p1, p2) = PdfFlowSelection.orderPoints(a, b)
+        val picked = document.getSelectionBounds(page, p1, p2) ?: document.getSelectionBounds(page, p2, p1)
+        val contents = picked?.selectedContents?.filterIsInstance<PdfPageTextContent>().orEmpty()
         val info=document.getPageInfo(page)
         return PdfSelection(contents.joinToString("\n") {it.text}.take(16384),contents.flatMap {it.bounds}.mapNotNull {PdfLocators.normalize(page,it,info.width,info.height)}).takeIf {it.boxes.isNotEmpty()}
     }
@@ -101,11 +103,19 @@ internal fun CroppedPdfScreen(book:Book,repository:LibraryRepository,document:Pd
             try {
                 val target=(requestedPage ?: initial).coerceIn(0,s.count-1)
                 val original=originalFraction
-                list.requestScrollToItem(target)
-                val (height,crop)=geometryEvents.map {it[target]}.filterNotNull().first()
-                val offset=((original-crop.top)/crop.height*height).toInt().coerceIn(0,(height-1).coerceAtLeast(0))
-                list.requestScrollToItem(target,offset)
-                currentOnPage(target,s.count,(crop.top+offset.toFloat()/height*crop.height).coerceIn(0f,1f))
+                list.scrollToItem(target, 0)
+                currentOnPage(target, s.count, 0f)
+                if (original > 0f) {
+                    val geo = withTimeoutOrNull(250) {
+                        geometryEvents.map { it[target] }.filterNotNull().first()
+                    }
+                    if (geo != null) {
+                        val (height, crop) = geo
+                        val offset = ((original - crop.top) / crop.height * height).toInt().coerceIn(0, (height - 1).coerceAtLeast(0))
+                        list.scrollToItem(target, offset)
+                        currentOnPage(target, s.count, (crop.top + offset.toFloat() / height * crop.height).coerceIn(0f, 1f))
+                    }
+                }
             } finally {restoring=false;reported=null}
         }
         LazyColumn(Modifier.fillMaxSize().testTag("pdf-cropped-list").pointerInput(s) {detectTapGestures(onTap={onTap()})}) {items(s.count,key={it}) {p->
@@ -196,9 +206,8 @@ private fun CroppedPdfPage(source:CroppedPdfSource,page:Int,config:PdfCropConfig
             val pa=point(a);val pb=point(b)
             val text=source.select(page,pa,pb)
             if(text!=null)onSelection(withBounds(text)) else {
-                val rect=RectF(min(pa.x,pb.x),min(pa.y,pb.y),max(pa.x,pb.x),max(pa.y,pb.y))
-                if(rect.width()<1)rect.right=(rect.left+im.width*.1f).coerceAtMost(im.width.toFloat());if(rect.height()<1)rect.bottom=(rect.top+im.height*.03f).coerceAtMost(im.height.toFloat())
-                PdfLocators.normalize(page,rect,im.width,im.height)?.let {onSelection(withBounds(PdfSelection("",listOf(it))))}
+                val boxes = PdfFlowSelection.buildFlowBoxes(page, pa, pb, im.width.toFloat(), im.height.toFloat(), crop.left, crop.right)
+                if (boxes.isNotEmpty()) onSelection(withBounds(PdfSelection("", boxes)))
             }
         }catch(e:CancellationException) {throw e}catch(_:Exception) {notify("PDF 选区读取失败，未保存标记")}}}
         Canvas(Modifier.fillMaxSize().transformable(transform,canPan={zoom>1f})
@@ -257,6 +266,37 @@ private fun CroppedPdfPage(source:CroppedPdfSource,page:Int,config:PdfCropConfig
                     val bl=left+(b.left-crop.left)*im.width*fit;val bt=top+(b.top-crop.top)*im.height*fit
                     val br=left+(b.right-crop.left)*im.width*fit;val bb=top+(b.bottom-crop.top)*im.height*fit
                     canvas.drawRect(bl,bt,br,bb,drawPaint)
+                }
+            }
+            endpoints?.let { (epA, epB) ->
+                val (pa, pb) = if (epA.y < epB.y || (epA.y == epB.y && epA.x <= epB.x)) epA to epB else epB to epA
+                drawPaint.color = 0x55246BFC
+                val lineHeight = 0.024f * im.height * fit
+                val contentLeft = left
+                val contentRight = left + im.width * crop.width * fit
+                val v1x = left + (pa.x - crop.left) * im.width * fit
+                val v1y = top + (pa.y - crop.top) * im.height * fit
+                val v2x = left + (pb.x - crop.left) * im.width * fit
+                val v2y = top + (pb.y - crop.top) * im.height * fit
+                if (kotlin.math.abs(v2y - v1y) < lineHeight * 0.9f) {
+                    val l = minOf(v1x, v2x)
+                    val r = maxOf(v1x, v2x).coerceAtLeast(l + 16f)
+                    val t = minOf(v1y, v2y)
+                    canvas.drawRect(l, t, r, t + lineHeight, drawPaint)
+                } else {
+                    val firstLeft = v1x.coerceIn(contentLeft, contentRight)
+                    if (contentRight > firstLeft) {
+                        canvas.drawRect(firstLeft, v1y, contentRight, v1y + lineHeight, drawPaint)
+                    }
+                    var curY = v1y + lineHeight
+                    while (curY + lineHeight <= v2y) {
+                        canvas.drawRect(contentLeft, curY, contentRight, curY + lineHeight, drawPaint)
+                        curY += lineHeight
+                    }
+                    val lastRight = v2x.coerceIn(contentLeft, contentRight)
+                    if (lastRight > contentLeft) {
+                        canvas.drawRect(contentLeft, curY, lastRight, curY + lineHeight, drawPaint)
+                    }
                 }
             }
             canvas.restore()

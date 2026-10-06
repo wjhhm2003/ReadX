@@ -113,7 +113,7 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
             {ordinal,target->clearSelection();vm.chapter(ordinal,target)},
             {ordinal,target,origin,anchor->chrome=true;vm.followLink(ordinal,target,origin,anchor)},
             {w,h->viewport=w to h},bookMarks.filter {it.chapter==session.chapter},
-            {zone->if(zone==0) {if(panel!=null) panel=null else chrome=!chrome} else {dismissControls();controller.turn(zone)}},
+            {zone->if(zone==0) {if(panel!=null) panel=null else chrome=!chrome} else {dismissControls();if(settings.layout!=ReadingLayout.SCROLL)controller.turn(zone)}},
             {value->if(vm.isCurrentNavigation(session.book.id,session.navigationId)) selection=value},
             {kind,anchor->if(kind=="NOTE") noteDraft=ReaderNoteDraft(anchor,"") else vm.addTextAnnotation(kind,anchor,"",fraction)},
             {position,final,local,count->

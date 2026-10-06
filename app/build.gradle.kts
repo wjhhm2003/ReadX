@@ -14,8 +14,8 @@ android {
         applicationId = "io.readx.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 12
-        versionName = if (bundledOcr) "0.7.0-ocr" else "0.7.0"
+        versionCode = 14
+        versionName = if (bundledOcr) "0.7.2-ocr" else "0.7.2"
         buildConfigField("boolean", "BUNDLED_OCR", bundledOcr.toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -48,6 +48,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3:1.5.0-alpha01")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("com.github.skydoves:colorpicker-compose:1.1.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.activity:activity-compose:1.12.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")

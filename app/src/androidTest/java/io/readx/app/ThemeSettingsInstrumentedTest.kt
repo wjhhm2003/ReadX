@@ -25,7 +25,7 @@ class ThemeSettingsInstrumentedTest {
         try {
             ActivityScenario.launch<MainActivity>(Intent(app,MainActivity::class.java)).use {
                 compose.onNode(hasText("设置") and hasClickAction()).performClick()
-                compose.onNodeWithText("应用主题").assertIsDisplayed()
+                compose.onNodeWithText("强调色与壁纸").assertIsDisplayed()
                 compose.onNodeWithText("紫色").performClick()
                 assertEquals(ThemeAccent.PURPLE,ReaderPreferences(app).settings.value.accent)
                 compose.onNodeWithTag("dynamic-colors-switch").performClick()
@@ -35,4 +35,22 @@ class ThemeSettingsInstrumentedTest {
             }
         } finally {prefs.update(old)}
     }
+
+    @Test fun customColorPickerPersistsAndAppliesCustomColor() {
+        val app=ApplicationProvider.getApplicationContext<ReadXApplication>()
+        val prefs=ReaderPreferences(app);val old=prefs.settings.value;prefs.update(ReaderSettings())
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(app,MainActivity::class.java)).use {
+                compose.onNode(hasText("设置") and hasClickAction()).performClick()
+                compose.onNodeWithText("自定义").performClick()
+                compose.onNodeWithText("自定义主题色").assertIsDisplayed()
+                compose.onNode(hasSetTextAction()).performTextClearance()
+                compose.onNode(hasSetTextAction()).performTextInput("2E7D32")
+                compose.onNodeWithText("应用").performClick()
+                assertEquals("#2E7D32",ReaderPreferences(app).settings.value.customAccent)
+                TestScreenshots.capture("theme-040-custom-color")
+            }
+        } finally {prefs.update(old)}
+    }
 }
+

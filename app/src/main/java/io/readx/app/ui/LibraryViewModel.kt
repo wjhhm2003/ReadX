@@ -65,6 +65,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         if(!enabled)io.readx.app.conversion.OcrDownloadPolicy.cancel(getApplication())
     }
     fun downloadModels() {try {io.readx.app.conversion.OcrDownloadPolicy.enqueue(getApplication(),settings.value.ocrLanguages)}catch(e:Exception) {notify(e.message ?: "无法下载模型")}}
+    fun downloadModel(name: String) {try {io.readx.app.conversion.OcrDownloadPolicy.enqueue(getApplication(),name)}catch(e:Exception) {notify(e.message ?: "无法下载模型")}}
     val preferences = ReaderPreferences(app)
     private var latestFraction = 0f
     private var latestAnchor: TextAnchor? = null
@@ -252,6 +253,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         openJob?.cancel()
         openJob = viewModelScope.launch {
             val book = repository.dao.book(annotation.bookId) ?: return@launch
+            if (book.format == "PDF") return@launch
             val chapters = repository.dao.chapters(book.id)
             if (chapters.isEmpty()) return@launch
             latestFraction = annotation.fraction

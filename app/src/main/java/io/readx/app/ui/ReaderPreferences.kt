@@ -42,7 +42,7 @@ class ReaderPreferences(private val context: Context) {
         customAccent = prefs.getString("customAccent", "").orEmpty().takeIf {it.matches(Regex("#[0-9A-Fa-f]{6}"))}.orEmpty(),
         annotationColor = io.readx.app.data.MarkColor.normalize(prefs.getString("annotationColor", "#FFD240").orEmpty()),
         pdfToEpubEnabled = prefs.getBoolean("pdfToEpubEnabled", false),
-        ocrLanguages = prefs.getString("ocrLanguages","chi_sim+eng").orEmpty().takeIf {it in listOf("chi_sim+eng","chi_tra+eng","eng")} ?: "chi_sim+eng",
+        ocrLanguages = prefs.getString("ocrLanguages","chi_sim+eng").orEmpty().takeIf {it in listOf("chi_sim+eng","chi_tra+eng","chi_tra","chi_sim","eng")} ?: "chi_sim+eng",
         pdfLayout = PdfReadingLayout.entries.firstOrNull { it.name == prefs.getString("pdfLayout", "VERTICAL") } ?: PdfReadingLayout.VERTICAL,
         theme = ReadingTheme.entries.firstOrNull { it.name == prefs.getString("theme", "SYSTEM") } ?: ReadingTheme.SYSTEM,
         layout = ReadingLayout.entries.firstOrNull { it.name == prefs.getString("layout", "PAGED") } ?: ReadingLayout.PAGED,

@@ -52,7 +52,7 @@ interface PdfConversionDao {
 }
 
 data class PdfConversionOptions(val languages: String = "chi_sim+eng", val models: Map<String, String> = emptyMap()) {
-    init { require(languages in listOf("chi_sim+eng", "chi_tra+eng", "eng")); require(models.values.all { it.matches(Regex("[a-f0-9]{64}")) }) }
+    init { require(languages in listOf("chi_sim+eng", "chi_tra+eng", "chi_tra", "chi_sim", "eng")); require(models.values.all { it.matches(Regex("[a-f0-9]{64}")) }) }
     fun json(): String = JSONObject().put("version", 2).put("languages", languages).put("models", JSONObject(models.toSortedMap())).toString()
     fun key(): String = digest(json())
     companion object {

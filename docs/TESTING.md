@@ -1,8 +1,32 @@
 # ReadX 验证记录
 
-## 2026-10-06 / 0.7.1（体验、美学与绘制性能优化）
+## 2026-10-06 / 0.7.2 / versionCode 14（稳定性与交互体验修复）
 
 ### 完成本轮闭环
+
+1. **批注跳转闪退修复（NPE / IllegalStateException 根除）**：
+   - `PdfActivity.kt`：`ReadXPdfFragment` 内部增加 `pendingTarget` 延迟跳转保护机制，在 `pdfDocument == null` 时杜绝直接调用 `PdfView.scrollToPage` 导致的未捕获异常；在 `onLoadDocumentSuccess` 触发时安全消费跳转；在 `PdfActivity` 建立安全唤醒与 `try/catch` 容错。
+   - `LibraryViewModel.kt` & `ReadXApp.kt`：点击批注时进行书籍格式精确分流，禁止 PDF 格式创建空章节 `ReaderSession`；书籍未在内存缓存时异步查库跳转至 `PdfActivity`。
+2. **PDF 线性流式文字选区**：
+   - 新增 `PdfFlowSelection.kt`：实现 `orderPoints` 端点排序与 `buildFlowBoxes` 逐行流式选区算法。
+   - `HorizontalPdfScreen.kt` & `CroppedPdfScreen.kt`：选区拖拽时绘制多行流式高亮条预览；选区提取按流式顺序规范化并支持逐行流式 box 备选高亮/下划线。
+3. **WebView TXT 滚动模式翻页交互对齐**：
+   - `LocalWebReader.kt`：滚动模式（`!paged`）下 `tapZone` 上报统一设为 `0`。
+   - `ImmersiveReaderScreen.kt`：`ReadingLayout.SCROLL` 模式下拦截三分屏翻页调用，仅做工具栏显隐切换。
+4. **原生 TXT 滚动模式物理惯性滑动**：
+   - `NativeTxtReader.kt`：集成 `OverScroller`、`VelocityTracker`、`ViewConfiguration.scaledMinimumFlingVelocity` 与 `postOnAnimation(flingRunnable)`，`ACTION_DOWN` 打断正在进行的惯性滚动，`ACTION_UP` 计算速度平滑减速，并修复空章节边界保护。
+5. **OCR 繁体中文模型支持与在线下载**：
+   - `ConversionData.kt` & `ReaderPreferences.kt`：增加 `chi_tra` 繁体中文模型支持，并配置官方 Fast 校验哈希（`10427807` 字节，SHA-256 `eb8da5839bceae72b1527e53f1604a43c22cfc16b67e05e55fe46006c9a93077`）。
+   - `LibraryViewModel.kt` & `PdfConversionUi.kt`：支持单语言模型独立下载，UI FilterChip 增加“繁体中文”选项并在各语言状态行提供一键下载按钮。
+
+### 实际验证与环境
+
+- JVM 单元测试：`.\gradlew.bat testDebugUnitTest --offline` 通过，全部通过（0 失败 / 0 跳过）。
+- 构建产物（本轮源码真实生成）：
+  - Debug：`E:\ReadX\app\build\outputs\apk\debug\app-debug.apk`，118,646,357 字节，SHA-256：`3C53AFE7A2DB998D27A99C09625455A96309C0F00043F2E31A23DE86147DD150`。
+  - Preview：`E:\ReadX\app\build\outputs\apk\preview\app-preview.apk`，41,218,885 字节，SHA-256：`58B93372A261EFD6B4801DBABE39E388B679F1E25ED6B22CDC5401772B9E5D65`（已开启 R8 与资源压缩）。
+
+---
 
 1. **本地字体管理与删除闭环**：
    - `LocalFontStore` 增加 `delete(id)`，支持清理私有 `.font` 存储文件、SharedPreferences 别名映射与内存 Typeface 缓存。
@@ -173,3 +197,47 @@ P95 使用 nearest-rank，n=10 时取该组最大值。
 2. 超长 PDF 真实内存压力/系统回收、全部复杂背景/字体/密码文档、所有高级文字端点拖动/链接目的页内坐标、原页旋转四边形、大字体/横屏/无障碍完整回归。普通 PDF 页内恢复当前基于原页 y fraction，不宣称完整 x/y/zoom 会话恢复。
 3. 跨章节文字选段、通用 EPUB CFI、任意复杂 EPUB/DRM 兼容、批注导出、联网、智能 PDF 重排和完整 KOReader 集成均不在本轮范围。
 4. 自动裁边是保守像素启发式，不保证任意原文检测正确；手动仍可能裁掉重要内容。扫描 PDF 没有文字层就不能默认全文搜索。
+
+
+## 2026-10-06 / 0.7.1 / versionCode 13
+
+### 变更与修复范围
+
+1. **版本号升级**：`app/build.gradle.kts` 中 `versionCode` 升级为 13，`versionName` 升级为 `0.7.1`（内置 OCR 时为 `0.7.1-ocr`），解决安装后仍显示 0.7.0 的问题。
+2. **主题自定义配色调色盘**：
+   - 依赖集成 `com.github.skydoves:colorpicker-compose:1.1.2`（经 Maven Central 解析成功）。
+   - 在外观设置中将原本的 HEX 输入弹窗升级为 HSV 调色盘：包含 `HsvColorPicker` 色盘轮盘、`BrightnessSlider` 明度滑块，并保留双向同步的 6 位 HEX 输入框与颜色色块预览。
+   - 选取颜色后即时生成全套 Material 3 配色方案并持久化到 `ReaderPreferences`。
+3. **PDF 滚动模式页码滑块与跳转修复**：
+   - 根因定位：① Compose `Slider` 在滑动与松手瞬间因状态重组时差导致 `onValueChangeFinished` 读取 `preview` 为 null；② 原生 `PdfView.scrollToPage` 派发异步滚动期间，旧页面的 `onViewportChanged` 回调提前触发 `pageChanged` 将 `page` 状态强制重置为旧页，导致用户体感“滑块弹回无效”。
+   - 修复方案：① `ReadingProgressControl` 增加即时值引用持有器，确保松手瞬间 100% 捕获落点；② `PdfActivity` 统一实现 `requestJump` 机制，在跳转执行期间锁定 `requestedPage`，忽略旧视口暂态回调，直到抵达目标页或超时解开；③ `CroppedPdfScreen` 裁边模式采用 250ms 有界超时替代无界挂起。
+4. **主界面「最近在读」取消常驻吸顶**：
+   - 将 `ReadXApp.kt` 书架列表中的 `stickyHeader` 改为普通列表项 `item`，滑动时随书架自然滚出屏幕，彻底解决遮挡问题。
+5. **PDF 批注菜单双重重叠消除**：
+   - 修复 AndroidX `PdfView` 的原生上下文菜单（荧光笔、下划线、写批注）点击后直接触发保存或调起笔记输入框，不再二次设置 Compose `selection` 状态；在原生菜单准备时显式清空旧的自定义浮层。
+
+### 验证记录
+
+- **JVM 单元测试**：52/52 全部通过。
+- **Lint 静态分析**：0 错误，60 警告。
+- **设备交互与真机截图**：
+  - 专用模拟器 `Pixel_6_API_36`（`emulator-5554`）在线验证。
+  - `ThemeSettingsInstrumentedTest`：调色盘对话框呼出、HSV 轮盘选色、HEX 输入、应用落库与 Material 3 界面动态配色实时更新，2/2 测试通过。
+  - `PdfTapRegressionInstrumentedTest`：纵向/横向滚动、触控唤起底栏、三区分屏翻页、导航栏底色无缝对齐，通过。
+  - `PdfFixVerificationInstrumentedTest`：纵向滚动模式下底部进度控制翻页、滑块拖拽松手跳转、多页定位与数据库章节落盘，测试通过。
+  - 真实运行截图：
+    - 主界面自然滚动无吸顶：`C:\Users\WJHHM\.gemini\antigravity\brain\00ec0a1c-3378-4f9d-b049-48e3e1324a46\screen_scrolled.png`
+    - HSV 调色盘弹窗交互：`C:\Users\WJHHM\.gemini\antigravity\brain\00ec0a1c-3378-4f9d-b049-48e3e1324a46\screen_colorpicker_opened.png`
+    - 选色后动态全套主题预览：`C:\Users\WJHHM\.gemini\antigravity\brain\00ec0a1c-3378-4f9d-b049-48e3e1324a46\screen_applied_color.png`
+
+### 交付产物
+
+- **Preview APK**（开启 R8 代码混淆与资源压缩，使用本机调试签名）：
+  - 路径：`E:\ReadX\app\build\outputs\apk\preview\app-preview.apk`
+  - 大小：41,218,885 字节（39.31 MiB）
+  - SHA-256：`CAA2F557301C993846C03540074E03BACC83E676D3D9FBC41CEF34969B52CF31`
+- **Debug APK**：
+  - 路径：`E:\ReadX\app\build\outputs\apk\debug\app-debug.apk`
+  - 大小：120,366,862 字节（114.79 MiB）
+  - SHA-256：`91DAF6FC82FD698487985657A160F11769D015EC8084E7B025B731AE2B468553`
+

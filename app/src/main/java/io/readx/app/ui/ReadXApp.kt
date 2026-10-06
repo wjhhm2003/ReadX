@@ -2,6 +2,7 @@
 package io.readx.app.ui
 
 import android.content.Intent
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +43,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.github.skydoves.colorpicker.compose.HsvColorPicker
+import com.github.skydoves.colorpicker.compose.BrightnessSlider
+import com.github.skydoves.colorpicker.compose.rememberColorPickerController
 import io.readx.app.data.Book
 import io.readx.app.data.Bookmark
 import io.readx.app.data.Annotation
@@ -69,6 +73,7 @@ fun ReadXApp(vm: LibraryViewModel) {
     var searchBook by remember { mutableStateOf<String?>(null) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { if (it.isNotEmpty()) vm.import(it) }
     fun open(book: Book) {
         if (book.format == "PDF" && settings.pdfToEpubEnabled) vm.convertPdf(book) else if (book.format == "PDF") context.startActivity(Intent(context, PdfActivity::class.java).putExtra("bookId", book.id)) else vm.open(book)
@@ -94,9 +99,19 @@ fun ReadXApp(vm: LibraryViewModel) {
                             settings = { showSettings = true },
                             selectTab = { tab -> selectedTab = tab },
                             edit = vm::edit, delete = vm::delete, openAnnotation = { annotation ->
-                                val book=books.firstOrNull { it.id==annotation.bookId }
-                                if(book?.format=="PDF") context.startActivity(Intent(context,PdfActivity::class.java).putExtra("bookId",book.id).putExtra("page",annotation.chapter).putExtra("annotationId",annotation.id))
-                                else vm.openAnnotation(annotation)
+                                val book = books.firstOrNull { it.id == annotation.bookId }
+                                if (book?.format == "PDF") {
+                                    context.startActivity(Intent(context, PdfActivity::class.java).putExtra("bookId", book.id).putExtra("page", annotation.chapter).putExtra("annotationId", annotation.id))
+                                } else {
+                                    scope.launch {
+                                        val loaded = book ?: vm.repository.dao.book(annotation.bookId)
+                                        if (loaded?.format == "PDF") {
+                                            context.startActivity(Intent(context, PdfActivity::class.java).putExtra("bookId", loaded.id).putExtra("page", annotation.chapter).putExtra("annotationId", annotation.id))
+                                        } else {
+                                            vm.openAnnotation(annotation)
+                                        }
+                                    }
+                                }
                             }, removeAnnotation = vm::deleteAnnotation, editAnnotation = vm::updateAnnotation,
                             readerSettings = settings, updateSettings = vm.preferences::update, conversionSettings = { PdfConversionSettings(vm) }, vm=vm,
                         )
@@ -266,7 +281,7 @@ private fun LibraryScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
                         } else {
                             if (showHome && recent.isNotEmpty()) {
-                                stickyHeader(key="recent-read-header") {Surface(color=MaterialTheme.colorScheme.surface,modifier=Modifier.fillMaxWidth()) {Column {
+                                item(key="recent-read-header") {Surface(color=MaterialTheme.colorScheme.surface,modifier=Modifier.fillMaxWidth()) {Column {
                                     Row(verticalAlignment=Alignment.CenterVertically) {Text("最近在读 · ${recent.size} 本",Modifier.weight(1f),style=MaterialTheme.typography.titleMedium);IconButton(onClick={recentExpanded=!recentExpanded}) {Icon(if(recentExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,"折叠或展开最近在读")}}
                                     if(recentExpanded) LazyRow(horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=12.dp)) {
                                         items(recent.take(8),key={it.id}) {book->ContinueCard(book,repository,{open(book)},{editing=book},{removing=book})}
@@ -526,7 +541,6 @@ internal fun AnnotationCard(annotation: Annotation, open: () -> Unit, remove: ()
 @Composable
 internal fun AppThemeOptions(settings: ReaderSettings, update: (ReaderSettings) -> Unit) {
     var custom by remember {mutableStateOf(false)}
-    var hex by remember(settings.customAccent) {mutableStateOf(settings.customAccent.removePrefix("#"))}
     val dynamicSupported=android.os.Build.VERSION.SDK_INT>=31
     Column(Modifier.fillMaxWidth(), verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Text("深浅外观",style=MaterialTheme.typography.titleMedium)
@@ -552,12 +566,99 @@ internal fun AppThemeOptions(settings: ReaderSettings, update: (ReaderSettings) 
             }
         }
     }
-    if(custom) AlertDialog(onDismissRequest={custom=false},title={Text("自定义主题色")},text={Column {
-        Text("输入主题种子色；系统会生成适合浅色与深色界面的色调。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(hex,{hex=it.filter {c->c in "0123456789abcdefABCDEF"}.take(6)},label={Text("RGB 十六进制，例如 7756AE")},prefix={Text("#")},singleLine=true)
-        if(hex.length==6) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(40.dp).background(Color(("FF"+hex).toLong(16)),RoundedCornerShape(8.dp)))
-    }},confirmButton={TextButton(onClick={update(settings.copy(customAccent="#${hex.uppercase()}"));custom=false},enabled=hex.length==6) {Text("应用")}},dismissButton={TextButton(onClick={custom=false}) {Text("取消")}})
+    if(custom) {
+        val controller = rememberColorPickerController()
+        var pickedHex by remember(settings.customAccent) {
+            mutableStateOf(settings.customAccent.removePrefix("#").ifBlank { "7756AE" }.uppercase())
+        }
+        AlertDialog(
+            onDismissRequest = { custom = false },
+            title = { Text("自定义主题色") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "拖动调色盘与亮度滑块选取主题色，系统会自动生成 Material 3 界面配色。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    HsvColorPicker(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .padding(horizontal = 8.dp),
+                        controller = controller,
+                        initialColor = runCatching { Color(("FF" + pickedHex).toLong(16)) }.getOrDefault(Color(0xFF7756AE)),
+                        onColorChanged = { envelope ->
+                            val hexStr = envelope.hexCode
+                            if (hexStr.length >= 6) {
+                                pickedHex = hexStr.takeLast(6).uppercase()
+                            }
+                        }
+                    )
+                    BrightnessSlider(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(35.dp)
+                            .padding(horizontal = 8.dp),
+                        controller = controller,
+                        initialColor = runCatching { Color(("FF" + pickedHex).toLong(16)) }.getOrDefault(Color(0xFF7756AE))
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            Modifier
+                                .size(40.dp)
+                                .background(
+                                    runCatching { Color(("FF" + pickedHex).toLong(16)) }.getOrDefault(Color.Gray),
+                                    RoundedCornerShape(8.dp)
+                                )
+                        )
+                        OutlinedTextField(
+                            value = pickedHex,
+                            onValueChange = { input ->
+                                val clean = input.filter { it in "0123456789abcdefABCDEF" }.take(6).uppercase()
+                                pickedHex = clean
+                                if (clean.length == 6) {
+                                    runCatching {
+                                        controller.selectByColor(Color(("FF" + clean).toLong(16)), fromUser = true)
+                                    }
+                                }
+                            },
+                            label = { Text("颜色代码") },
+                            prefix = { Text("#") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (pickedHex.length == 6) {
+                            update(settings.copy(customAccent = "#$pickedHex"))
+                            custom = false
+                        }
+                    },
+                    enabled = pickedHex.length == 6
+                ) {
+                    Text("应用")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { custom = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 }
 
 @Composable

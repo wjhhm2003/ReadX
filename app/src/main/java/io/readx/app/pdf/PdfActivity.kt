@@ -76,7 +76,7 @@ class PdfActivity : AppCompatActivity() {
     private var originalFraction by mutableFloatStateOf(0f)
     private var book by mutableStateOf<Book?>(null)
     private var pageCount by mutableIntStateOf(0)
-    private var page by mutableIntStateOf(0)
+    internal var page by mutableIntStateOf(0)
     private var status by mutableStateOf("正在打开 PDF…")
     private var chrome by mutableStateOf(false)
     private var colorPanel by mutableStateOf(false)
@@ -87,7 +87,8 @@ class PdfActivity : AppCompatActivity() {
     private var annotations by mutableStateOf<List<Annotation>>(emptyList())
     private var selection by mutableStateOf<PdfSelection?>(null)
     private var noteSelection by mutableStateOf<PdfSelection?>(null)
-    private var requestedPage by mutableStateOf<Int?>(null)
+    internal var requestedPage by mutableStateOf<Int?>(null)
+    private var requestedPageJob: Job? = null
     private var topControlBounds:androidx.compose.ui.geometry.Rect?=null
     private var bottomControlBounds:androidx.compose.ui.geometry.Rect?=null
     private val exportModel by lazy {androidx.lifecycle.ViewModelProvider(this)[io.readx.app.ui.LibraryViewModel::class.java]}
@@ -144,10 +145,12 @@ class PdfActivity : AppCompatActivity() {
                     }
                     AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.BottomCenter).onGloballyPositioned {bottomControlBounds=it.boundsInRoot()}) {
                         Surface(shape=ReadXDesign.readerPanelShape,color=MaterialTheme.colorScheme.surfaceContainerHigh) {Column {
-                            io.readx.app.ui.ReadingProgressControl(if(pageCount>0) page+1 else null,pageCount.takeIf {it>0},"原 PDF 页码",
-                                {target->requestedPage=target-1;originalFraction=0f;viewer?.go(target-1)},
-                                {requestedPage=(page-1).coerceAtLeast(0);originalFraction=0f;viewer?.go(requestedPage!!)},
-                                {requestedPage=(page+1).coerceAtMost((pageCount-1).coerceAtLeast(0));originalFraction=0f;viewer?.go(requestedPage!!)},page>0,page<pageCount-1)
+                            io.readx.app.ui.ReadingProgressControl(
+                                if(pageCount>0) page+1 else null,pageCount.takeIf {it>0},"原 PDF 页码",
+                                {target->requestJump((target-1).coerceIn(0,(pageCount-1).coerceAtLeast(0)))},
+                                {requestJump((page-1).coerceAtLeast(0))},
+                                {requestJump((page+1).coerceAtMost((pageCount-1).coerceAtLeast(0)))},
+                                page>0,page<pageCount-1)
                             if(colorPanel) Column(Modifier.padding(16.dp)) {
                                 Text("标记颜色",style=MaterialTheme.typography.titleSmall);MarkColorPicker(settings.annotationColor) {preferences.update(settings.copy(annotationColor=it))}
                                 Text("PDF 保持原文颜色，不是反色或文字重排。",style=MaterialTheme.typography.bodySmall)
@@ -165,7 +168,7 @@ class PdfActivity : AppCompatActivity() {
                 }
                 if(cropOpen) book?.let {loaded->PdfCropDialog(loaded,page,document,supportsAdvanced,repository,cropConfig,{value->requestedPage=page;cropConfig=value;lifecycleScope.launch {repository.dao.savePdfCrop(loaded.id,value.json())}},{cropOpen=false})}
                 if(cropSearchOpen) document?.let {pdf->CroppedPdfSearchDialog(pdf,{boxes->searchBoxes=boxes;boxes.firstOrNull()?.let {hit->requestedPage=hit.page;originalFraction=hit.top;viewer?.go(hit.page)}},{cropSearchOpen=false})}
-                if(jump) PageJumpDialog(pageCount,{target->requestedPage=target;viewer?.go(target);jump=false}) {jump=false}
+                if(jump) PageJumpDialog(pageCount,{target->requestJump(target);jump=false}) {jump=false}
                 selection?.let {picked->PdfSelectionPopup(picked,{selection=null}) {
                     if(picked.quote.isBlank()) Text("区域选区 · 非 OCR 文字",style=MaterialTheme.typography.labelSmall)
                     val old=annotations.firstOrNull {it.id in picked.existingIds}
@@ -255,27 +258,58 @@ class PdfActivity : AppCompatActivity() {
     }
     internal val currentOriginalPosition:Pair<Int,Float> get()=page to originalFraction
     override fun onStop() {pdfPositionJob?.cancel();book?.let {repository.persistPosition(it.id,page,originalFraction)};super.onStop()}
+    private var pendingFocusAnnotation: Annotation? = null
     private fun focusAnnotation(annotation:Annotation) {
         val boxes=PdfLocators.decode(annotation.locator)
         requestedPage=annotation.chapter;originalFraction=boxes.firstOrNull()?.top ?: annotation.fraction
-        viewer?.go(annotation.chapter,originalFraction,smooth=true)
+        if (document != null || isHorizontal() || viewer?.currentDocument() != null) {
+            viewer?.go(annotation.chapter,originalFraction,smooth=true)
+        } else {
+            pendingFocusAnnotation = annotation
+        }
         focusJob?.cancel();focusJob=lifecycleScope.launch {
             withTimeoutOrNull(5000) {androidx.compose.runtime.snapshotFlow {pageCount>0 && page==annotation.chapter}.filter {it}.first()}
             repeat(3) {flashBoxes=boxes;viewer?.flash(boxes);delay(240);flashBoxes=emptyList();viewer?.flash(emptyList());delay(140)}
         }
     }
-    fun loaded(pdf: PdfDocument) {document=pdf;pageCount=pdf.pageCount;status="";book?.let {loaded->lifecycleScope.launch {repository.dao.saveTotalUnits(loaded.id,pdf.pageCount)}}}
+    fun loaded(pdf: PdfDocument) {
+        document=pdf;pageCount=pdf.pageCount;status=""
+        book?.let {loaded->lifecycleScope.launch {repository.dao.saveTotalUnits(loaded.id,pdf.pageCount)}}
+        pendingFocusAnnotation?.let { a ->
+            pendingFocusAnnotation = null
+            focusAnnotation(a)
+        }
+    }
     fun toggleChrome() {chrome=!chrome}
     fun openMarked(annotation: Annotation) {selection=PdfSelection(annotation.quote,PdfLocators.decode(annotation.locator),listOf(annotation.id),viewer?.selectionWindowBounds(PdfLocators.decode(annotation.locator)))}
     fun isHorizontal() = preferences.settings.value.pdfLayout==PdfReadingLayout.HORIZONTAL || cropConfig.enabled
     fun pageChanged(index: Int, fraction:Float=0f) {if(!isHorizontal()) {page=index;originalFraction=fraction}}
+    fun requestJump(targetIndex: Int) {
+        val target = targetIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        page = target
+        requestedPage = target
+        originalFraction = 0f
+        viewer?.go(target)
+        requestedPageJob?.cancel()
+        requestedPageJob = lifecycleScope.launch {
+            delay(1500)
+            if (requestedPage == target) requestedPage = null
+        }
+    }
+    fun clearCustomSelection() { selection = null }
     fun annotate(kind: String, picked: TextSelection) {
         val pdf=document ?: return
         lifecycleScope.launch {
             try {
                 val boxes=picked.bounds.take(2000).mapNotNull {rect->val info=pdf.getPageInfo(rect.pageNum);PdfLocators.normalize(rect.pageNum,RectF(rect.left,rect.top,rect.right,rect.bottom),info.width,info.height)}
                 val selected=PdfSelection(picked.text.toString().take(16384),boxes,windowBounds=viewer?.selectionWindowBounds(boxes))
-                if(boxes.isNotEmpty()) selection=selected
+                if(boxes.isNotEmpty()) {
+                    if(kind=="NOTE") {
+                        noteSelection=selected
+                    } else {
+                        saveAnnotation(kind,selected,"")
+                    }
+                }
             } catch(e: CancellationException) {throw e} catch(e: Exception) {failed(e)}
         }
     }
@@ -320,12 +354,18 @@ class ReadXPdfFragment : PdfViewerFragment() {
             }
         })
         pdfView.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                (activity as? PdfActivity)?.let { host ->
+                    if (host.requestedPage != null) host.requestedPage = null
+                }
+            }
             taps.onTouchEvent(event)
             // Never consume the PDF stream: scrolling, pinch/double-tap zoom and selection stay native.
             false
         }
         pdfView.addSelectionMenuItemPreparer(object: PdfView.SelectionMenuItemPreparer {
             override fun onPrepareSelectionMenuItems(components: MutableList<androidx.pdf.selection.ContextMenuComponent>) {
+                (activity as? PdfActivity)?.clearCustomSelection()
                 if(pdfView.currentSelection !is TextSelection) return
                 listOf("HIGHLIGHT" to "荧光笔","UNDERLINE" to "下划线","NOTE" to "写批注").forEach {(kind,label)->
                     if(components.none {it.key=="readx-$kind"}) components.add(SelectionMenuComponent("readx-$kind",label,label) {
@@ -341,17 +381,36 @@ class ReadXPdfFragment : PdfViewerFragment() {
                 if (firstVisiblePage < 0 || (activity as? PdfActivity)?.isHorizontal()==true) return
                 val location=pageLocations[firstVisiblePage]
                 val fraction=if(location!=null && location.height()>0) ((-location.top)/location.height()).coerceIn(0f,1f) else 0f
-                (activity as? PdfActivity)?.pageChanged(firstVisiblePage,fraction)
+                val host = activity as? PdfActivity
+                val req = host?.requestedPage
+                if (req != null) {
+                    if (firstVisiblePage == req) {
+                        host.requestedPage = null
+                        host.pageChanged(firstVisiblePage, fraction)
+                    }
+                } else {
+                    host?.pageChanged(firstVisiblePage, fraction)
+                }
                 saveJob?.cancel()
                 val id = requireArguments().getString("bookId")!!
                 saveJob = lifecycleScope.launch { delay(350); repository.dao.savePosition(id, firstVisiblePage, fraction, System.currentTimeMillis()) }
             }
         })
     }
+    private var pendingTarget: Pair<Int, Float>? = null
+
     override fun onLoadDocumentSuccess(document: PdfDocument) {
         (activity as? PdfActivity)?.loaded(document)
-        // The fragment sets PdfView.pdfDocument immediately after this callback.
-        if (!restoringSavedViewport) currentView?.post {currentView?.scrollToPage(requireArguments().getInt("initialPage").coerceIn(0,document.pageCount-1))}
+        val pending = pendingTarget
+        pendingTarget = null
+        if (pending != null) {
+            go(pending.first, pending.second, smooth = false)
+        } else if (!restoringSavedViewport) {
+            val initial = requireArguments().getInt("initialPage").coerceIn(0, (document.pageCount - 1).coerceAtLeast(0))
+            currentView?.post {
+                try { currentView?.scrollToPage(initial) } catch(_: Throwable) {}
+            }
+        }
     }
     override fun onLoadDocumentError(error: Throwable) { (activity as? PdfActivity)?.failed(error) }
     override fun onRequestImmersiveMode(enterImmersive: Boolean) {
@@ -360,12 +419,37 @@ class ReadXPdfFragment : PdfViewerFragment() {
     override fun onLinkClicked(externalLink: ExternalLink): Boolean {
         Toast.makeText(context, "外部链接未打开：本版本仅访问本地内容", Toast.LENGTH_SHORT).show(); return true
     }
-    fun go(page: Int, fraction:Float=0f,smooth:Boolean=false) {
+    fun go(page: Int, fraction: Float = 0f, smooth: Boolean = false) {
         saveJob?.cancel()
-        if(smooth)currentView?.let {it.alpha=.2f;it.animate().alpha(1f).setDuration(180).start()}
-        val pdf=currentView?.pdfDocument
-        if(fraction<=0 || pdf==null)currentView?.scrollToPage(page)
-        else lifecycleScope.launch {val info=pdf.getPageInfo(page.coerceIn(0,pdf.pageCount-1));currentView?.scrollToPosition(androidx.pdf.PdfPoint(page,0f,info.height*fraction))}
+        val pdf = currentView?.pdfDocument
+        if (pdf == null) {
+            pendingTarget = page to fraction
+            return
+        }
+        if (smooth) currentView?.let { it.alpha = .2f; it.animate().alpha(1f).setDuration(180).start() }
+        val targetPage = page.coerceIn(0, (pdf.pageCount - 1).coerceAtLeast(0))
+        if (fraction <= 0f) {
+            currentView?.post {
+                try { currentView?.scrollToPage(targetPage) } catch(_: Throwable) {}
+            }
+        } else {
+            lifecycleScope.launch {
+                try {
+                    val info = pdf.getPageInfo(targetPage)
+                    currentView?.post {
+                        try {
+                            currentView?.scrollToPosition(androidx.pdf.PdfPoint(targetPage, 0f, info.height * fraction))
+                        } catch(_: Throwable) {
+                            try { currentView?.scrollToPage(targetPage) } catch(_: Throwable) {}
+                        }
+                    }
+                } catch(_: Throwable) {
+                    currentView?.post {
+                        try { currentView?.scrollToPage(targetPage) } catch(_: Throwable) {}
+                    }
+                }
+            }
+        }
     }
     fun annotationsChanged(values: List<Annotation>) {marks=values;overlay?.updateAnnotations(values)}
     fun flash(boxes:List<PdfBox>) {overlay?.flash(boxes)}

@@ -79,6 +79,8 @@ internal fun LocalFontOptions(vm:LibraryViewModel) {
 @Composable
 internal fun ReadingProgressControl(current:Int?,total:Int?,label:String,onJump:(Int)->Unit,previous:()->Unit,next:()->Unit,canPrevious:Boolean,canNext:Boolean) {
     var preview by remember {mutableStateOf<Float?>(null)}
+    val lastValue = remember { floatArrayOf((current ?: 1).toFloat()) }
+    LaunchedEffect(current) { if (current != null && preview == null) lastValue[0] = current.toFloat() }
     var exact by remember {mutableStateOf(false)}
     var input by remember {mutableStateOf("")}
     val known=total!=null && total>0 && current!=null && current>0
@@ -90,7 +92,14 @@ internal fun ReadingProgressControl(current:Int?,total:Int?,label:String,onJump:
                 Modifier.testTag("exact-page-entry").combinedClickable(onClick={if(known) {input=current.toString();exact=true}},onLongClick={if(known) {input=current.toString();exact=true}}).padding(12.dp),style=MaterialTheme.typography.labelLarge)
             IconButton(onClick=next,enabled=canNext) {Icon(Icons.Rounded.SkipNext,"下一章节或原文页")}
         }
-        Slider(value=preview ?: (current ?: 1).toFloat(),onValueChange={preview=it},onValueChangeFinished={preview?.let {onJump(it.roundToInt())};preview=null},valueRange=1f..(total ?: 2).coerceAtLeast(2).toFloat(),enabled=known && total!!>1,modifier=Modifier.height(32.dp).testTag("reading-progress-slider"))
+        Slider(
+            value=preview ?: (current ?: 1).toFloat(),
+            onValueChange={preview=it;lastValue[0]=it},
+            onValueChangeFinished={onJump(lastValue[0].roundToInt());preview=null},
+            valueRange=1f..(total ?: 2).coerceAtLeast(2).toFloat(),
+            enabled=known && total!!>1,
+            modifier=Modifier.height(32.dp).testTag("reading-progress-slider")
+        )
     }
     if(exact) {
         val number=input.toIntOrNull()

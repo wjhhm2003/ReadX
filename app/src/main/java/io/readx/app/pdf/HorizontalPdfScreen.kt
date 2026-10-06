@@ -178,20 +178,18 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                         var start=Offset.Zero;var end=Offset.Zero
                         detectDragGesturesAfterLongPress(onDragStart={start=it;end=it;selecting=start to end},onDragCancel={selecting=null},
                             onDragEnd={
-                                val a=toPdf(start);val b=toPdf(end);selecting=null
+                                val (pa, pb) = PdfFlowSelection.orderPoints(toPdf(start), toPdf(end))
                                 scope.launch {
                                     try {
-                                        val selection=if(document!=null) {
-                                            val picked=document.getSelectionBounds(page,a,b)
-                                            val texts=picked?.selectedContents?.filterIsInstance<PdfPageTextContent>().orEmpty()
-                                            PdfSelection(texts.joinToString("\n") {it.text}.take(16384),texts.flatMap {it.bounds}.mapNotNull {PdfLocators.normalize(page,it,image.width,image.height)}).takeIf {it.boxes.isNotEmpty()}
-                                        } else native?.select(page,a,b)
-                                        if(selection!=null) onSelection(selection)
+                                        val selection = if (document != null) {
+                                            val picked = document.getSelectionBounds(page, pa, pb) ?: document.getSelectionBounds(page, pb, pa)
+                                            val texts = picked?.selectedContents?.filterIsInstance<PdfPageTextContent>().orEmpty()
+                                            PdfSelection(texts.joinToString("\n") { it.text }.take(16384), texts.flatMap { it.bounds }.mapNotNull { PdfLocators.normalize(page, it, image.width, image.height) }).takeIf { it.boxes.isNotEmpty() }
+                                        } else native?.select(page, pa, pb)
+                                        if (selection != null) onSelection(selection)
                                         else {
-                                            val rect=RectF(minOf(a.x,b.x),minOf(a.y,b.y),maxOf(a.x,b.x),maxOf(a.y,b.y))
-                                            if(rect.width()<5) rect.right=(rect.left+image.width*.12f).coerceAtMost(image.width.toFloat())
-                                            if(rect.height()<5) rect.bottom=(rect.top+image.height*.025f).coerceAtMost(image.height.toFloat())
-                                            PdfLocators.normalize(page,rect,image.width,image.height)?.let {onSelection(PdfSelection("",listOf(it)))}
+                                            val boxes = PdfFlowSelection.buildFlowBoxes(page, pa, pb, image.width.toFloat(), image.height.toFloat())
+                                            if (boxes.isNotEmpty()) onSelection(PdfSelection("", boxes))
                                         }
                                     } catch(e: CancellationException) {throw e} catch(e: Exception) {pageError=e.message?:"选区失败"}
                                 }
@@ -212,7 +210,38 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                         }}
 
                     }
-                    selecting?.let {(a,b)->Canvas(Modifier.fillMaxSize()) {drawRect(Color(0xFF246BFC).copy(alpha=.25f),Offset(minOf(a.x,b.x),minOf(a.y,b.y)),androidx.compose.ui.geometry.Size(kotlin.math.abs(a.x-b.x).coerceAtLeast(1f),kotlin.math.abs(a.y-b.y).coerceAtLeast(1f)))}}
+                    selecting?.let { (rawA, rawB) ->
+                        val (a, b) = if (rawA.y < rawB.y || (rawA.y == rawB.y && rawA.x <= rawB.x)) rawA to rawB else rawB to rawA
+                        val flowColor = Color(0xFF246BFC).copy(alpha = .28f)
+                        Canvas(Modifier.fillMaxSize()) {
+                            val lineHeight = (22.dp.toPx() * zoom * fit).coerceAtLeast(18f)
+                            if (kotlin.math.abs(b.y - a.y) < lineHeight * 0.9f) {
+                                val l = minOf(a.x, b.x)
+                                val r = maxOf(a.x, b.x).coerceAtLeast(l + 8.dp.toPx())
+                                val t = minOf(a.y, b.y)
+                                drawRect(flowColor, Offset(l, t), androidx.compose.ui.geometry.Size(r - l, lineHeight))
+                            } else {
+                                val pageLeft = left + pan.x
+                                val pageRight = left + image.width * fit * zoom + pan.x
+                                val contentLeft = pageLeft + 20.dp.toPx() * zoom
+                                val contentRight = pageRight - 20.dp.toPx() * zoom
+
+                                val firstLeft = a.x.coerceIn(contentLeft, contentRight)
+                                if (contentRight > firstLeft) {
+                                    drawRect(flowColor, Offset(firstLeft, a.y), androidx.compose.ui.geometry.Size(contentRight - firstLeft, lineHeight))
+                                }
+                                var curY = a.y + lineHeight
+                                while (curY + lineHeight <= b.y) {
+                                    drawRect(flowColor, Offset(contentLeft, curY), androidx.compose.ui.geometry.Size(contentRight - contentLeft, lineHeight))
+                                    curY += lineHeight
+                                }
+                                val lastRight = b.x.coerceIn(contentLeft, contentRight)
+                                if (lastRight > contentLeft) {
+                                    drawRect(flowColor, Offset(contentLeft, curY), androidx.compose.ui.geometry.Size(lastRight - contentLeft, lineHeight))
+                                }
+                            }
+                        }
+                    }
                     if(zoom>1f) TextButton(onClick={zoom=1f;pan=Offset.Zero},modifier=Modifier.align(Alignment.TopEnd)) {Text("重置缩放")}
                 }
             }
