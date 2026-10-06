@@ -30,6 +30,8 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
@@ -106,7 +108,7 @@ internal fun renderSize(width: Int,height: Int,target: Int = 1280): Size {
 
 @Composable
 fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: PdfDocument?, useAdvanced: Boolean,
-    annotations: List<Annotation>, requestedPage: Int?, onPage: (Int,Int)->Unit, onSelection: (PdfSelection)->Unit,onTapPage: ()->Unit = {}, flashBoxes:List<PdfBox> = emptyList()) {
+    annotations: List<Annotation>, requestedPage: Int?, onPage: (Int,Int)->Unit, onSelection: (PdfSelection)->Unit,onTapPage: ()->Unit = {}, flashBoxes:List<PdfBox> = emptyList(),inverted:Boolean=false,activeSelection:PdfSelection?=null) {
     var native by remember(book.id) { mutableStateOf<NativePdfSource?>(null) }
     var error by remember(book.id) { mutableStateOf<String?>(null) }
     val scope=rememberCoroutineScope()
@@ -147,15 +149,33 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                 var size by remember {mutableStateOf(IntSize.Zero)}
                 var zoom by remember(page) {mutableFloatStateOf(1f)}
                 var pan by remember(page) {mutableStateOf(Offset.Zero)}
-                var selecting by remember(page) {mutableStateOf<Pair<Offset,Offset>?>(null)}
                 val transform=rememberTransformableState { scale,offset,_->zoom=(zoom*scale).coerceIn(1f,5f);pan=if(zoom<=1f) Offset.Zero else pan+offset }
                 val fit=if(size.width>0 && size.height>0) min(size.width.toFloat()/image.width,size.height.toFloat()/image.height) else 1f
                 val left=(size.width-image.width*fit)/2
                 val top=((size.height-image.height*fit)/2).coerceAtLeast(0f)
                 fun toPdf(offset: Offset)=PointF(((offset.x-pan.x)/zoom-left).div(fit).coerceIn(0f,image.width.toFloat()),(((offset.y-pan.y)/zoom-top)/fit).coerceIn(0f,image.height.toFloat()))
-                Box(Modifier.fillMaxSize().testTag("pdf-page-$page").onSizeChanged {size=it}.transformable(transform,canPan={zoom>1f})
+                var origin by remember(page) {mutableStateOf(Offset.Zero)}
+                fun withBounds(value:PdfSelection):PdfSelection {
+                    val boxes=value.boxes.filter {it.page==page}
+                    if(boxes.isEmpty())return value
+                    val x1=(left+boxes.minOf {it.left}*image.width*fit)*zoom+pan.x
+                    val y1=(top+boxes.minOf {it.top}*image.height*fit)*zoom+pan.y
+                    val x2=(left+boxes.maxOf {it.right}*image.width*fit)*zoom+pan.x
+                    val y2=(top+boxes.maxOf {it.bottom}*image.height*fit)*zoom+pan.y
+                    return value.copy(windowBounds=androidx.compose.ui.geometry.Rect(origin.x+x1,origin.y+y1,origin.x+x2,origin.y+y2))
+                }
+                val textSelection=rememberPdfTextSelection(page,image.width.toFloat(),image.height.toFloat(),{a,b->
+                    if(document!=null) {
+                        val picked=document.getSelectionBounds(page,a,b)
+                        val texts=picked?.selectedContents?.filterIsInstance<PdfPageTextContent>().orEmpty()
+                        PdfSelection(texts.joinToString("\n") {it.text}.take(16384),texts.flatMap {it.bounds}.mapNotNull {PdfLocators.normalize(page,it,image.width,image.height)}).takeIf {it.boxes.isNotEmpty()}
+                    } else native?.select(page,a,b)
+                },{onSelection(withBounds(it))},{pageError=it})
+                LaunchedEffect(activeSelection) {textSelection.sync(activeSelection)}
+                Box(Modifier.fillMaxSize().testTag("pdf-page-$page").onGloballyPositioned {origin=it.positionInWindow()}.onSizeChanged {size=it}.transformable(transform,canPan={zoom>1f})
                     .pointerInput(page,fit,top,zoom,pan,annotations) {
-                        detectTapGestures(onTap={where->
+                        detectTapGestures(onLongPress={textSelection.begin(toPdf(it))},onTap={where->
+                            if(textSelection.picked!=null) {textSelection.cancel();onTapPage();return@detectTapGestures}
                             val direction = when {
                                 where.x < size.width / 3f -> -1
                                 where.x >= size.width * 2 / 3f -> 1
@@ -175,28 +195,13 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                         })
                     }
                     .pointerInput(page,fit,top,zoom,pan,document,native) {
-                        var start=Offset.Zero;var end=Offset.Zero
-                        detectDragGesturesAfterLongPress(onDragStart={start=it;end=it;selecting=start to end},onDragCancel={selecting=null},
-                            onDragEnd={
-                                val (pa, pb) = PdfFlowSelection.orderPoints(toPdf(start), toPdf(end))
-                                scope.launch {
-                                    try {
-                                        val selection = if (document != null) {
-                                            val picked = document.getSelectionBounds(page, pa, pb) ?: document.getSelectionBounds(page, pb, pa)
-                                            val texts = picked?.selectedContents?.filterIsInstance<PdfPageTextContent>().orEmpty()
-                                            PdfSelection(texts.joinToString("\n") { it.text }.take(16384), texts.flatMap { it.bounds }.mapNotNull { PdfLocators.normalize(page, it, image.width, image.height) }).takeIf { it.boxes.isNotEmpty() }
-                                        } else native?.select(page, pa, pb)
-                                        if (selection != null) onSelection(selection)
-                                        else {
-                                            val boxes = PdfFlowSelection.buildFlowBoxes(page, pa, pb, image.width.toFloat(), image.height.toFloat())
-                                            if (boxes.isNotEmpty()) onSelection(PdfSelection("", boxes))
-                                        }
-                                    } catch(e: CancellationException) {throw e} catch(e: Exception) {pageError=e.message?:"选区失败"}
-                                }
-                            }) {change,_->change.consume();end=change.position;selecting=start to end}
+                        detectDragGesturesAfterLongPress(onDragStart={textSelection.begin(toPdf(it))},
+                            onDragCancel={textSelection.cancel()},onDragEnd={textSelection.finish()}) {change,_->
+                            change.consume();textSelection.extend(toPdf(change.position))
+                        }
                     }) {
                     Canvas(Modifier.fillMaxSize().graphicsLayer {scaleX=zoom;scaleY=zoom;translationX=pan.x;translationY=pan.y;transformOrigin=TransformOrigin(0f,0f)}) {
-                        drawImage(image.bitmap.asImageBitmap(),dstOffset=IntOffset(left.toInt(),top.toInt()),dstSize=IntSize((image.width*fit).toInt(),(image.height*fit).toInt()))
+                        drawImage(image.bitmap.asImageBitmap(),dstOffset=IntOffset(left.toInt(),top.toInt()),dstSize=IntSize((image.width*fit).toInt(),(image.height*fit).toInt()),colorFilter=if(inverted) PdfNightMode.filter else null)
                         flashBoxes.filter {it.page==page}.forEach {b->drawRect(Color(0x55246BFC),Offset(left+b.left*image.width*fit,top+b.top*image.height*fit),androidx.compose.ui.geometry.Size((b.right-b.left)*image.width*fit,(b.bottom-b.top)*image.height*fit))}
                         val sorted=annotations.sortedBy {maxOf(it.updatedAt,it.createdAt)}
                         val layerPaint=android.graphics.Paint().apply {alpha=82}
@@ -210,38 +215,8 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                         }}
 
                     }
-                    selecting?.let { (rawA, rawB) ->
-                        val (a, b) = if (rawA.y < rawB.y || (rawA.y == rawB.y && rawA.x <= rawB.x)) rawA to rawB else rawB to rawA
-                        val flowColor = Color(0xFF246BFC).copy(alpha = .28f)
-                        Canvas(Modifier.fillMaxSize()) {
-                            val lineHeight = (22.dp.toPx() * zoom * fit).coerceAtLeast(18f)
-                            if (kotlin.math.abs(b.y - a.y) < lineHeight * 0.9f) {
-                                val l = minOf(a.x, b.x)
-                                val r = maxOf(a.x, b.x).coerceAtLeast(l + 8.dp.toPx())
-                                val t = minOf(a.y, b.y)
-                                drawRect(flowColor, Offset(l, t), androidx.compose.ui.geometry.Size(r - l, lineHeight))
-                            } else {
-                                val pageLeft = left + pan.x
-                                val pageRight = left + image.width * fit * zoom + pan.x
-                                val contentLeft = pageLeft + 20.dp.toPx() * zoom
-                                val contentRight = pageRight - 20.dp.toPx() * zoom
-
-                                val firstLeft = a.x.coerceIn(contentLeft, contentRight)
-                                if (contentRight > firstLeft) {
-                                    drawRect(flowColor, Offset(firstLeft, a.y), androidx.compose.ui.geometry.Size(contentRight - firstLeft, lineHeight))
-                                }
-                                var curY = a.y + lineHeight
-                                while (curY + lineHeight <= b.y) {
-                                    drawRect(flowColor, Offset(contentLeft, curY), androidx.compose.ui.geometry.Size(contentRight - contentLeft, lineHeight))
-                                    curY += lineHeight
-                                }
-                                val lastRight = b.x.coerceIn(contentLeft, contentRight)
-                                if (lastRight > contentLeft) {
-                                    drawRect(flowColor, Offset(contentLeft, curY), androidx.compose.ui.geometry.Size(lastRight - contentLeft, lineHeight))
-                                }
-                            }
-                        }
-                    }
+                    PdfTextSelectionHandles(textSelection,page,
+                        {x,y->Offset((left+x*image.width*fit)*zoom+pan.x,(top+y*image.height*fit)*zoom+pan.y)},{toPdf(it)})
                     if(zoom>1f) TextButton(onClick={zoom=1f;pan=Offset.Zero},modifier=Modifier.align(Alignment.TopEnd)) {Text("重置缩放")}
                 }
             }

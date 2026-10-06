@@ -21,6 +21,7 @@ data class ReaderSettings(
     val pdfToEpubEnabled: Boolean = false,
     val ocrLanguages: String = "chi_sim+eng",
     val pdfLayout: PdfReadingLayout = PdfReadingLayout.VERTICAL,
+    val pdfInverted: Boolean = false,
     val theme: ReadingTheme = ReadingTheme.SYSTEM,
     val layout: ReadingLayout = ReadingLayout.PAGED,
     val fontSize: Float = 20f,
@@ -44,6 +45,7 @@ class ReaderPreferences(private val context: Context) {
         pdfToEpubEnabled = prefs.getBoolean("pdfToEpubEnabled", false),
         ocrLanguages = prefs.getString("ocrLanguages","chi_sim+eng").orEmpty().takeIf {it in listOf("chi_sim+eng","chi_tra+eng","chi_tra","chi_sim","eng")} ?: "chi_sim+eng",
         pdfLayout = PdfReadingLayout.entries.firstOrNull { it.name == prefs.getString("pdfLayout", "VERTICAL") } ?: PdfReadingLayout.VERTICAL,
+        pdfInverted = prefs.getBoolean("pdfInverted", false),
         theme = ReadingTheme.entries.firstOrNull { it.name == prefs.getString("theme", "SYSTEM") } ?: ReadingTheme.SYSTEM,
         layout = ReadingLayout.entries.firstOrNull { it.name == prefs.getString("layout", "PAGED") } ?: ReadingLayout.PAGED,
         fontSize = prefs.getFloat("fontSize", 20f).coerceIn(14f, 32f),
@@ -69,7 +71,7 @@ class ReaderPreferences(private val context: Context) {
         state.value = value
         prefs.edit().putBoolean("pdfToEpubEnabled", value.pdfToEpubEnabled).putString("ocrLanguages",value.ocrLanguages).putString("accent", value.accent.name).putBoolean("dynamicColors", value.dynamicColors)
             .putString("customAccent",value.customAccent).putString("annotationColor",value.annotationColor)
-            .putString("pdfLayout", value.pdfLayout.name).putString("theme", value.theme.name).putString("layout", value.layout.name)
+            .putBoolean("pdfInverted", value.pdfInverted).putString("pdfLayout", value.pdfLayout.name).putString("theme", value.theme.name).putString("layout", value.layout.name)
             .putFloat("fontSize", value.fontSize).putFloat("lineHeight", value.lineHeight)
             .putFloat("margin", value.margin).putBoolean("serif", value.serif)
             .putBoolean("onlineModels",value.onlineModels).putString("fontId",value.fontId).putBoolean("shelfGrid",value.shelfGrid).putString("shelfSort",value.shelfSort)

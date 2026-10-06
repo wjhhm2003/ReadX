@@ -30,8 +30,8 @@ internal fun PdfSelectionPopup(selection:PdfSelection,dismiss:()->Unit,content:@
             return IntOffset(x,y)
         }
     }}
-    Popup(popupPositionProvider=position,onDismissRequest=dismiss,properties=PopupProperties(focusable=false,dismissOnBackPress=true)) {
-        Surface(shape=RoundedCornerShape(20.dp),color=MaterialTheme.colorScheme.surfaceContainerHighest,shadowElevation=8.dp,modifier=Modifier.widthIn(max=340.dp)) {
+    Popup(popupPositionProvider=position,onDismissRequest=dismiss,properties=PopupProperties(focusable=false,dismissOnBackPress=true,dismissOnClickOutside=false)) {
+        Surface(shape=RoundedCornerShape(20.dp),color=MaterialTheme.colorScheme.surfaceContainerHighest,contentColor=MaterialTheme.colorScheme.onSurface,shadowElevation=8.dp,modifier=Modifier.widthIn(max=340.dp)) {
             Column(Modifier.padding(12.dp)) {content()}
         }
     }

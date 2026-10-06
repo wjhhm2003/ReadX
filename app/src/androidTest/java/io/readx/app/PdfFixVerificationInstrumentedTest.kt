@@ -90,6 +90,11 @@ class PdfFixVerificationInstrumentedTest {
                     cur >= 3
                 }
 
+                compose.waitUntil(10000) {
+                    var actual=-1
+                    scenario.onActivity {actual=findPdf(it.window.decorView)?.firstVisiblePage ?: -1}
+                    actual>=3
+                }
                 // Verify database saved chapterIndex >= 3 with debounce wait
                 compose.waitUntil(10000) {
                     val saved = runBlocking { app.repository.dao.book(book.id)?.chapterIndex ?: 0 }

@@ -1,5 +1,6 @@
 package io.readx.app.conversion
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -34,6 +35,7 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
     private val conversions get() = app.conversions
     private val conversionId get() = inputData.getString("conversionId") ?: error("任务参数缺失")
     private var processingStage="QUEUED"
+    private var processingPage=0
     private var completed=0;private var total=0;private var imagePages=0
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val initial=conversions.dao.get(conversionId) ?: return@withContext Result.failure()
@@ -49,13 +51,14 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
         } catch(e: CancellationException) {
             withContext(NonCancellable) {conversions.dao.get(conversionId)?.takeIf {it.stage!="COMPLETE" && it.stage!="WAITING_MODEL"}?.let {conversions.dao.progressForRun(conversionId,id.toString(),"CANCELLED",completed,total,imagePages)}}
             throw e
-        } catch(_: ProtectedPdf) {progress("FAILED","密码 PDF 首版不转换，请使用原版阅读");Result.failure()}
+        } catch(e: MissingOcrModels) {progress("WAITING_MODEL","需要导入 ${e.names.joinToString("、")} .traineddata 模型后继续");Result.success()}
+        catch(_: ProtectedPdf) {progress("FAILED","密码 PDF 首版不转换，请使用原版阅读");Result.failure()}
         catch(_: InvalidPasswordException) {progress("FAILED","密码 PDF 首版不转换，请使用原版阅读");Result.failure()}
         catch(_: NoReadableBody) {progress("FAILED","未获得可重排正文，请检查 OCR 模型或使用原 PDF；未生成图片冒充的转换版");Result.failure()}
         catch(_: OutOfMemoryError) {progress("FAILED","转换内存不足，请使用原版阅读");Result.failure()}
         catch(e: Exception) {
-            val where=if(processingStage in listOf("EXTRACTING","OCR")) "原文第 ${(completed+1).coerceAtMost(total.coerceAtLeast(1))} 页" else when(processingStage) {"PACKAGING"->"EPUB 打包";"IMPORTING"->"书库导入";else->"文档准备"}
-            val reason=when(e) {is java.io.IOException->"文件读取/写入失败，可能损坏或存储空间不足";is IllegalArgumentException->"页面数据无效或资源超出限额";is IllegalStateException->"页面处理或本地识别引擎失败";else->"当前格式处理失败"}
+            val where=if(e is OcrPageFailure) "原文第 ${e.page+1} 页（OCR）" else if(processingStage in listOf("EXTRACTING","OCR")) "原文第 ${(processingPage+1).coerceAtMost(total.coerceAtLeast(1))} 页" else when(processingStage) {"PACKAGING"->"EPUB 打包";"IMPORTING"->"书库导入";else->"文档准备"}
+            val reason=when(if(e is OcrPageFailure)e.cause else e) {is java.io.IOException->"文件读取/写入失败，可能损坏或存储空间不足";is IllegalArgumentException->"页面数据无效或资源超出限额";is IllegalStateException->"页面处理或本地识别引擎失败";else->"当前格式处理失败"}
             progress("FAILED","$where：$reason。已完成页检查点保留，继续时只处理缺失或损坏页。")
             Result.failure()
         }
@@ -78,7 +81,10 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
         val options=PdfConversionOptions.parse(initial.optionsJson)
         val files=ConversionFiles(conversions.root,conversionId)
         files.cleanupTemporary()
-        var tess:TessBaseAPI?=null
+        val manager=applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memory=ActivityManager.MemoryInfo().also {manager.getMemoryInfo(it)}
+        val workerCount=OcrParallelism.workers(Runtime.getRuntime().availableProcessors(),manager.memoryClass,memory.availMem,memory.lowMemory,Int.MAX_VALUE)
+        val engines=arrayOfNulls<TessBaseAPI>(workerCount)
         var modelSession:File?=null
         try {
             PDFBoxResourceLoader.init(applicationContext)
@@ -94,40 +100,81 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
                 ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).use {fd->PdfRenderer(fd).use {renderer->
                     val extractor=PdfPageExtractor()
                     var stagedBytes=0L
-                    for(index in 0 until total) {
-                        currentCoroutineContext().ensureActive()
-                        val cached=files.load(index)
-                        if(cached!=null) {stagedBytes+=cached.html.toByteArray().size+files.image(index).takeIf {it.isFile}?.length().orZero();require(stagedBytes<=160L*1024*1024);completed=index+1;if(cached.image) imagePages++;continue}
-                        progress("EXTRACTING")
-                        var flow=extractor.extract(document,index)
-                        var usedOcr=false
-                        if(flow.paragraphs.isEmpty() || flow.paragraphs.joinToString("").count {it=='\uFFFD'}>5) {
-                            val missing=options.languages.split('+').filter {name->options.models[name]?.let {app.ocrModels.model(name,it).isFile}!=true}
-                            if(missing.isNotEmpty()) {progress("WAITING_MODEL","需要导入 ${missing.joinToString("、")} .traineddata 模型后继续");return}
-                            if(tess==null) {
-                                modelSession=File(files.directory,"recognizer").apply {mkdirs()}
-                                File(modelSession,"tessdata").mkdirs()
-                                for(name in options.languages.split('+')) app.ocrModels.model(name,options.models.getValue(name)).copyTo(File(modelSession,"tessdata/$name.traineddata"),overwrite=true)
-                                tess=TessBaseAPI().also {require(it.init(modelSession!!.absolutePath,options.languages,TessBaseAPI.OEM_LSTM_ONLY));it.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO)}
+                    // PDFBox / PdfRenderer remain confined to this producer. Only recognition runs
+                    // concurrently, each slot owns its native API. Batches cap all resident page images.
+                    coroutineScope {
+                        for(batchStart in 0 until total step workerCount) {
+                            val pending=mutableListOf<Pair<Int,Deferred<Pair<FlowPage,Boolean>>?>>()
+                            for(index in batchStart until minOf(total,batchStart+workerCount)) {
+                                ensureActive()
+                                if(files.load(index)!=null) {pending+=index to null;continue}
+                                processingPage=index
+                                progress("EXTRACTING")
+                                val extracted=extractor.extract(document,index)
+                                val needsOcr=extracted.paragraphs.isEmpty() || extracted.paragraphs.joinToString("").count {it=='\uFFFD'}>5
+                                if(!needsOcr) {pending+=index to CompletableDeferred(extracted to false);continue}
+                                val missing=options.languages.split('+').filter {name->options.models[name]?.let {app.ocrModels.model(name,it).isFile}!=true}
+                                if(missing.isNotEmpty())throw MissingOcrModels(missing)
+                                if(modelSession==null) {
+                                    modelSession=File(files.directory,"recognizer").apply {mkdirs()}
+                                    File(modelSession,"tessdata").mkdirs()
+                                    for(name in options.languages.split('+')) {
+                                        ensureActive()
+                                        app.ocrModels.model(name,options.models.getValue(name)).copyTo(File(modelSession,"tessdata/$name.traineddata"),overwrite=true)
+                                    }
+                                }
+                                progress("OCR")
+                                val bitmap=render(renderer,index)
+                                val slot=index%workerCount
+                                // Enter finally before dispatch so even cancellation before CPU execution
+                                // recycles this producer-owned bitmap.
+                                val result=async(start=CoroutineStart.UNDISPATCHED) {
+                                    try {withContext(Dispatchers.Default) {
+                                        ensureActive()
+                                        val engine=engines[slot] ?: TessBaseAPI().also {api->
+                                            try {
+                                                require(api.init(modelSession!!.absolutePath,options.languages,TessBaseAPI.OEM_LSTM_ONLY))
+                                                api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO)
+                                                engines[slot]=api
+                                            } catch(e:Throwable) {api.recycle();throw e}
+                                        }
+                                        try {
+                                            engine.setImage(bitmap)
+                                            var recognized=PdfPageExtractor.ocr(engine.getHOCRText(index),bitmap.width.toFloat())
+                                            if(engine.meanConfidence()<40)recognized=recognized.copy(unreliable=true)
+                                            ensureActive()
+                                            recognized to true
+                                        } finally {engine.clear()}
+                                    }} catch(e:CancellationException) {throw e}
+                                    catch(e:Exception) {throw OcrPageFailure(index,e)}
+                                    finally {bitmap.recycle()}
+                                }
+                                pending+=index to result
                             }
-                            progress("OCR")
-                            val bitmap=render(renderer,index)
-                            try {
-                                tess!!.setImage(bitmap)
-                                flow=PdfPageExtractor.ocr(tess!!.getHOCRText(index),bitmap.width.toFloat())
-                                if(tess!!.meanConfidence()<40) flow=flow.copy(unreliable=true)
-                                tess!!.clear();usedOcr=true
-                            } finally {bitmap.recycle()}
-                            currentCoroutineContext().ensureActive()
+                            // Persist in source-page order: completedPages remains a contiguous durable
+                            // prefix, so resume and model-change checkpoint compatibility are unchanged.
+                            for((index,result) in pending) {
+                                ensureActive()
+                                val cached=if(result==null)files.load(index) else null
+                                if(cached!=null) {
+                                    stagedBytes+=cached.html.toByteArray().size+files.image(index).takeIf {it.isFile}?.length().orZero()
+                                    require(stagedBytes<=160L*1024*1024)
+                                    completed=index+1;if(cached.image)imagePages++
+                                    continue
+                                }
+                                processingPage=index
+                                val (flow,usedOcr)=requireNotNull(result).await()
+                                val original=flow.unreliable || flow.paragraphs.isEmpty()
+                                if(original || index==0)saveImage(renderer,index,files.image(index))
+                                val content=if(original) "<p>本页版式或识别结果不可靠，保留原页图像。</p><img src='images/p$index.jpg' alt='PDF 原文第 ${index+1} 页'/>" else flow.paragraphs.joinToString("") {"<p>${EpubOutput.escape(it)}</p>"}
+                                files.save(ConversionFiles.Page(index,"<section data-source-page='$index' id='src-p-$index'>$content</section>",!original,original,usedOcr,if(!original)flow.paragraphs.firstOrNull {PdfTextFlow.isHeading(it)}.orEmpty() else ""))
+                                stagedBytes+=content.toByteArray().size+files.image(index).takeIf {it.isFile}?.length().orZero()
+                                require(stagedBytes<=160L*1024*1024) {"转换资源超限"}
+                                completed=index+1;if(original)imagePages++
+                                progress(if(usedOcr) "OCR" else "EXTRACTING")
+                                yield()
+                            }
                         }
-                        val original=flow.unreliable || flow.paragraphs.isEmpty()
-                        if(original || index==0) saveImage(renderer,index,files.image(index))
-                        val content=if(original) "<p>本页版式或识别结果不可靠，保留原页图像。</p><img src='images/p$index.jpg' alt='PDF 原文第 ${index+1} 页'/>" else flow.paragraphs.joinToString("") {"<p>${EpubOutput.escape(it)}</p>"}
-                        files.save(ConversionFiles.Page(index,"<section data-source-page='$index' id='src-p-$index'>$content</section>",!original,original,usedOcr,if(!original) flow.paragraphs.firstOrNull {PdfTextFlow.isHeading(it)}.orEmpty() else ""))
-                        stagedBytes+=content.toByteArray().size+files.image(index).takeIf {it.isFile}?.length().orZero();require(stagedBytes<=160L*1024*1024) {"转换资源超限"}
-                        completed=index+1;if(original) imagePages++
-                        progress(if(usedOcr) "OCR" else "EXTRACTING")
-                        yield()
                     }
                 }}
                 if(!(0 until total).any {files.load(it)?.text==true}) throw NoReadableBody()
@@ -163,7 +210,7 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
             val notice=NotificationCompat.Builder(applicationContext,"pdf-conversion").setSmallIcon(R.drawable.ic_readx).setContentTitle("PDF 转换完成").setContentText("独立 EPUB 已加入书库").setContentIntent(open).setAutoCancel(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build()
             if(androidx.core.content.ContextCompat.checkSelfPermission(applicationContext,android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT<33) manager.notify(conversionId.hashCode() xor 0x40000000,notice)
         } finally {
-            tess?.recycle()
+            engines.forEach {it?.recycle()}
             modelSession?.let {session->File(session,"tessdata").listFiles()?.filter {it.isFile}?.forEach {it.delete()};File(session,"tessdata").delete();session.delete()}
             if(conversions.dao.get(conversionId)?.stage=="COMPLETE") files.directory.delete()
             withContext(NonCancellable) {app.ocrModels.pruneUnusedVersions()}
@@ -179,6 +226,10 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
         try {file.outputStream().use {bitmap.compress(Bitmap.CompressFormat.JPEG,85,it)}} finally {bitmap.recycle()}
     }
 }
+
+private class OcrPageFailure(val page:Int,cause:Exception):Exception(cause)
+
+private class MissingOcrModels(val names:List<String>):Exception()
 
 private class ProtectedPdf : Exception()
 

@@ -241,3 +241,60 @@ P95 使用 nearest-rank，n=10 时取该组最大值。
   - 大小：120,366,862 字节（114.79 MiB）
   - SHA-256：`91DAF6FC82FD698487985657A160F11769D015EC8084E7B025B731AE2B468553`
 
+
+
+## 0.7.3 PDF 文字选取、滚动跳转、反色与 OCR 并行（2026-10-06）
+
+### 范围与环境
+
+- 本轮为普通版：versionCode 15，versionName 0.7.3 / 0.7.3-preview，不内置 OCR 模型。Room 仍为 v6，无数据库结构/迁移或源文件修改。
+- 专用 `Pixel_6_API_36` / `emulator-5554`，Android 16 / API 36；启动现有 AVD，不 wipe-data、不卸载或 pm clear。测试使用自生成 PDF / 已有公开生成的裁边样书；模型为固定官方 tessdata_fast，放在测试设备 qa-models，不上传书籍。
+- 最终构建：`assembleDebug testDebugUnitTest lintDebug assemblePreview --offline -Pkotlin.incremental=false` 成功。首次增量测试命中旧 ReaderSettings 构造器 ABI，出现 NoSuchMethodError；关闭本轮增量编译后重新验证，并非忽略失败。
+
+### 已通过
+
+| 验证 | 实际结果 |
+| --- | --- |
+| JVM | 55 tests，0 failures / errors / skipped；包括新增并行核数、native/位图预算与低内存调度测试 |
+| Lint | 0 errors，63 warnings；未禁用检查/新增隐藏问题的 baseline |
+| PDF 目标设备回归 | `PdfInteractionRegressionInstrumentedTest` 8/8：普通长按后真实引用、拖手柄引用确实扩大并落盘；横向及裁边；扫描页不创建伪文字/区域选区；基础/裁边列表双向滑块真实跳页和落盘；高级/横向/基础反色与重建恢复 |
+| 高级跳页/手势 | `PdfFixVerificationInstrumentedTest` 验证原生 firstVisiblePage 而不只是乐观 UI 页码；`PdfTapRegressionInstrumentedTest` 原生纵向点击、横向三区翻页通过 |
+| 裁边基础回归 | `PdfCropInstrumentedTest` 2/2：缓存预算/检测与高级裁边文字层搜索、原页坐标批注通过；不等于全部裁边手势已验收 |
+| 转换隔离回归 | `PdfConversionInstrumentedTest` 4 项通过：损坏/密码/纯图失败不发布、文字层转换/去重/导出/删除、多扫描页缺模型与续算、取消恢复及损坏模型偏好保护；混合样书由 2 页扩为 4 页（3 页扫描），确实识别中英文正文 |
+| OCR 性能与内容 | 独立 `OcrParallelPerformanceInstrumentedTest` 通过；多个识别器实际同时运行，结果正文和置信度断言通过 |
+| Preview 压缩包 | R8/资源压缩成功；apksigner verify 成功（v2，1 signer）；在专用 AVD 覆盖安装并启动 MainActivity，am start Status ok，进程仍在，无该进程 AndroidRuntime 崩溃输出。未把安装启动当作压缩版全部阅读功能验收 |
+
+### OCR 性能方法与数字
+
+同一张自生成 1694×2400 位图，22 行英文；固定 tessdata_fast eng、PSM_AUTO；独立模型实例先预热，6 页/组，两轮串行与并行交替执行；排除模型初始化、PDF 提取/渲染、EPUB 打包和导入时间。不是整书端到端或真机基准。
+
+- 设备可用核数 4，memoryClass 192 MiB，实际调度 3 个识别器；观察到最大 3 个同时识别。
+- 最终隔离重跑：串行 4871 / 4672 ms，平均 **4771.5 ms**；并行 2338 / 2328 ms，平均 **2333 ms**；吞吐比 **2.045×**。
+- 前一轮同样方法为 1.948×；不承诺固定倍数、持续满核、真机温控/功耗或复杂扫描件质量不变以外的广泛兼容。
+- 首次性能测试遗漏 PDFBoxResourceLoader 初始化，造成类初始化失败并污染同进程转换测试。已修正测试初始化，停止那一次专用测试进程（没有清数据），随后隔离重跑通过；测试模型会话清理限 UUID 命名的本测试目录。
+
+### 仍失败 / 未覆盖（不可计为全部通过）
+
+- 合并的 18 项回归最终一轮为 **15 通过 / 3 失败**，不是全绿：旧手动裁边规则保存用例、全局转换开关用例，以及图像样书阶段状态断言（预期 FAILED，实际 WAITING_MODEL）。图像样书用例在独立转换组重跑通过，组合状态不一致仍保留记录。
+- `PdfCropPlatformInstrumentedTest.basicVerticalProgressManualRulesAndReopen` 在最后的手动裁边确认/规则断言处超时；没有据此声称裁边手柄全部通过，也未混入无关裁边架构替换。测试原始触摸确认方式已保留。
+- `globalSwitchPersistsAndStartsOnlyWhenPdfIsOpened` 在未授权通知时被系统权限弹层遮住，出现 No compose hierarchies；专用设备预授予通知权限后，该用例仍在任务出现处超时，未完成定位。应用通知授权逻辑没有被绕过或修改。
+- 隔离完整转换组为 **4 通过 / 1 失败 / 1 跳过**；跳过的是可选私人 PDF，未提供到专用设备，没有把用户工作区书籍上传或复制进行此测试。
+- 未跑全量设备套件、旧系统、高字号/横屏、复杂多栏/竖排/旋转 PDF、跨页选字、长扫描件温控/低内存长期压力；基础旧系统无选字 API 时只能提示，不以框选冒充文字。
+- RGB 反转也改变彩色图片；高级查看器自身的内部选区/搜索 UI 随其 RenderEffect 一起反转，应用独立批注与下栏不反转。
+
+### 真实截图与交付
+
+截图为自生成英文 PDF，不是原书或设计稿：
+
+- `docs/screenshots/073-pdf-text-selection-generated.png`：真实文字手柄扩选。
+- `docs/screenshots/073-pdf-night-generated.png`：实际页面 RGB 反色。
+- `docs/screenshots/073-pdf-regression-overview.png`：上述原始截图等比例缩小并排，只增加标签。
+
+本轮核实的普通版 APK（Preview 为本机调试签名，不是正式发行签名）：
+
+| 产物 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `E:/ReadX/app/build/outputs/apk/debug/app-debug.apk` | 119359914 | `EEDF3A2BE326598EA98EC29C9A04C6A9D5D9661EEAC6C29B36ED3B78A5B18F80` |
+| `E:/ReadX/app/build/outputs/apk/preview/app-preview.apk` | 41235265 | `3B31FD10E06B8B141EBD78011E764A64E5E750D1D7D69AEE97772C2B4941FD2C` |
+
+Debug / Preview 同 applicationId，安装会替换现有应用；普通版无内置模型，但保留应用私有目录内已经导入的模型。书库备份未实现，不能把一次模拟器覆盖安装当成完整备份验收。

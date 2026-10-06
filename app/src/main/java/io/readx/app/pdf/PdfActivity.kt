@@ -44,6 +44,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.ComposeView
@@ -128,10 +129,11 @@ class PdfActivity : AppCompatActivity() {
         val container=if(supportsAdvanced) FragmentContainerView(this).apply {this.id=PDF_CONTAINER_ID} else null
         val header=ComposeView(this).apply {this.id=PDF_CONTROLS_ID;setContent {
             val settings by preferences.settings.collectAsState()
-            ReadXTheme(settings,reading=true) {
+            ReadXTheme(if(settings.pdfInverted) settings.copy(theme=ReadingTheme.NIGHT) else settings,reading=true) {
                 val background=MaterialTheme.colorScheme.background.toArgb()
                 val navigationColor = if(chrome) MaterialTheme.colorScheme.surfaceContainerHigh.toArgb() else background
                 SideEffect {
+                    viewer?.setInverted(settings.pdfInverted)
                     root.setBackgroundColor(background)
                     navigationPaint.color = navigationColor
                     @Suppress("DEPRECATION")
@@ -141,10 +143,10 @@ class PdfActivity : AppCompatActivity() {
                 Box(Modifier.fillMaxSize()) {
                     if(!chrome) Text(if(pageCount>0) "${page+1} / $pageCount" else "加载中…",Modifier.align(Alignment.BottomEnd).padding(end=20.dp,bottom=5.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.TopStart).onGloballyPositioned {topControlBounds=it.boundsInRoot()}) {
-                        Surface(shape=CircleShape,color=MaterialTheme.colorScheme.surfaceContainer.copy(alpha=.94f),modifier=Modifier.padding(10.dp)) {IconButton(onClick={finish()}) {Icon(Icons.AutoMirrored.Rounded.ArrowBack,"返回书库")}}
+                        Surface(shape=CircleShape,color=MaterialTheme.colorScheme.surfaceContainer.copy(alpha=.94f),contentColor=MaterialTheme.colorScheme.onSurface,modifier=Modifier.padding(10.dp)) {IconButton(onClick={finish()}) {Icon(Icons.AutoMirrored.Rounded.ArrowBack,"返回书库")}}
                     }
                     AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.BottomCenter).onGloballyPositioned {bottomControlBounds=it.boundsInRoot()}) {
-                        Surface(shape=ReadXDesign.readerPanelShape,color=MaterialTheme.colorScheme.surfaceContainerHigh) {Column {
+                        Surface(shape=ReadXDesign.readerPanelShape,color=MaterialTheme.colorScheme.surfaceContainerHigh,contentColor=MaterialTheme.colorScheme.onSurface) {Column {
                             io.readx.app.ui.ReadingProgressControl(
                                 if(pageCount>0) page+1 else null,pageCount.takeIf {it>0},"原 PDF 页码",
                                 {target->requestJump((target-1).coerceIn(0,(pageCount-1).coerceAtLeast(0)))},
@@ -153,12 +155,17 @@ class PdfActivity : AppCompatActivity() {
                                 page>0,page<pageCount-1)
                             if(colorPanel) Column(Modifier.padding(16.dp)) {
                                 Text("标记颜色",style=MaterialTheme.typography.titleSmall);MarkColorPicker(settings.annotationColor) {preferences.update(settings.copy(annotationColor=it))}
-                                Text("PDF 保持原文颜色，不是反色或文字重排。",style=MaterialTheme.typography.bodySmall)
+                                Row(verticalAlignment=Alignment.CenterVertically) {
+                                    Text("PDF 反色（夜间模式）",Modifier.weight(1f))
+                                    Switch(checked=settings.pdfInverted,onCheckedChange={preferences.update(settings.copy(pdfInverted=it))},modifier=Modifier.testTag("pdf-night-switch"))
+                                }
+                                Text("仅改变阅读显示，不修改原 PDF 或批注坐标。",style=MaterialTheme.typography.bodySmall)
                             }
                             Row(Modifier.fillMaxWidth().height(64.dp),horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) {
                                 IconButton(onClick={notesOpen=true}) {Icon(Icons.Rounded.EditNote,"本书批注")}
                                 IconButton(onClick={if(pageCount>0) jump=true},enabled=pageCount>0) {Icon(Icons.Rounded.Numbers,"跳转页码")}
                                 IconButton(onClick={requestedPage=page;preferences.update(settings.copy(pdfLayout=if(settings.pdfLayout==PdfReadingLayout.VERTICAL) PdfReadingLayout.HORIZONTAL else PdfReadingLayout.VERTICAL))}) {Icon(if(settings.pdfLayout==PdfReadingLayout.HORIZONTAL) Icons.Rounded.ViewAgenda else Icons.Rounded.ViewCarousel,"切换 PDF 横向或纵向阅读")}
+                                FilledTonalIconToggleButton(checked=settings.pdfInverted,onCheckedChange={preferences.update(settings.copy(pdfInverted=it))}) {Icon(Icons.Rounded.Brightness6,"PDF 夜间反色")}
                                 FilledTonalIconToggleButton(checked=colorPanel,onCheckedChange={colorPanel=it}) {Icon(Icons.Rounded.Palette,"标记颜色")}
                                 IconButton(onClick={requestedPage=page;cropOpen=true}) {Icon(Icons.Rounded.Crop,"PDF 裁边")}
                                 if(supportsAdvanced) IconButton(onClick={if(cropConfig.enabled || settings.pdfLayout==PdfReadingLayout.HORIZONTAL) cropSearchOpen=true else viewer?.isTextSearchActive=true}) {Icon(Icons.Rounded.Search,"PDF 搜索")}
@@ -202,7 +209,7 @@ class PdfActivity : AppCompatActivity() {
         // host can still win touch dispatch. Route the reading stream explicitly in those regions.
         val content=object:FrameLayout(this@PdfActivity) {
             override fun dispatchTouchEvent(event:MotionEvent):Boolean {
-                val overlayOpen=selection!=null || noteSelection!=null || cropOpen || cropSearchOpen || notesOpen || jump || error!=null
+                val overlayOpen=noteSelection!=null || cropOpen || cropSearchOpen || notesOpen || jump || error!=null
                 val density=resources.displayMetrics.density
                 val point=androidx.compose.ui.geometry.Offset(event.x,event.y)
                 val onControls=chrome && (topControlBounds?.contains(point)==true || bottomControlBounds?.contains(point)==true || (bottomControlBounds==null && event.y>height-76*density))
@@ -230,13 +237,13 @@ class PdfActivity : AppCompatActivity() {
                 }
                 body.visibility=if(horizontal) View.VISIBLE else View.GONE
             }
-            ReadXTheme(settings,reading=true) {
+            ReadXTheme(if(settings.pdfInverted) settings.copy(theme=ReadingTheme.NIGHT) else settings,reading=true) {
                 if(horizontal) book?.let {loaded->
                     if(custom) CroppedPdfScreen(loaded,repository,document,supportsAdvanced,cropConfig,settings.pdfLayout==PdfReadingLayout.VERTICAL,annotations,requestedPage,originalFraction,
                         {current,count,fraction->page=current;pageCount=count;originalFraction=fraction;pdfPositionJob?.cancel();pdfPositionJob=lifecycleScope.launch {delay(350);repository.dao.savePosition(loaded.id,current,fraction,System.currentTimeMillis())}},
-                        {selection=it},{chrome=!chrome},searchBoxes+flashBoxes,{Toast.makeText(this,it,Toast.LENGTH_SHORT).show()})
+                        {selection=it},{if(selection!=null) selection=null else chrome=!chrome},searchBoxes+flashBoxes,{Toast.makeText(this,it,Toast.LENGTH_SHORT).show()},settings.pdfInverted,selection)
                     else HorizontalPdfScreen(loaded,repository,document,supportsAdvanced,annotations,requestedPage,
-                        {current,count->page=current;pageCount=count}, {selection=it}, {chrome=!chrome},flashBoxes)
+                        {current,count->page=current;pageCount=count}, {selection=it}, {if(selection!=null) selection=null else chrome=!chrome},flashBoxes,settings.pdfInverted,selection)
                 }
             }
         }
@@ -328,6 +335,14 @@ class ReadXPdfFragment : PdfViewerFragment() {
     private var overlay: PdfAnnotationOverlay? = null
     private var marks: List<Annotation> = emptyList()
     private var restoringSavedViewport = false
+    private var inverted = false
+    private var filteredView:PdfView?=null
+    fun setInverted(value:Boolean) {
+        if(inverted==value && filteredView===currentView)return
+        inverted=value
+        filteredView=currentView
+        currentView?.setRenderEffect(if(value) PdfNightMode.effect() else null)
+    }
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         restoringSavedViewport = savedInstanceState != null
         super.onViewCreated(view, savedInstanceState)
@@ -335,6 +350,7 @@ class ReadXPdfFragment : PdfViewerFragment() {
     private val repository get() = (requireActivity().application as ReadXApplication).repository
     override fun onPdfViewCreated(pdfView: PdfView) {
         currentView = pdfView
+        setInverted(ReaderPreferences(requireContext()).settings.value.pdfInverted)
         pdfView.verticalAlignment = PdfView.VERTICAL_ALIGNMENT_TOP
         val overlayView=PdfAnnotationOverlay(requireContext())
         overlay=overlayView;overlayView.updateAnnotations(marks)
@@ -366,7 +382,13 @@ class ReadXPdfFragment : PdfViewerFragment() {
         pdfView.addSelectionMenuItemPreparer(object: PdfView.SelectionMenuItemPreparer {
             override fun onPrepareSelectionMenuItems(components: MutableList<androidx.pdf.selection.ContextMenuComponent>) {
                 (activity as? PdfActivity)?.clearCustomSelection()
-                if(pdfView.currentSelection !is TextSelection) return
+                if(pdfView.currentSelection !is TextSelection) {
+                    if(pdfView.currentSelection!=null) {
+                        pdfView.clearCurrentSelection()
+                        Toast.makeText(requireContext(),"此处没有可选文字；扫描页需先 OCR",Toast.LENGTH_SHORT).show()
+                    }
+                    return
+                }
                 listOf("HIGHLIGHT" to "荧光笔","UNDERLINE" to "下划线","NOTE" to "写批注").forEach {(kind,label)->
                     if(components.none {it.key=="readx-$kind"}) components.add(SelectionMenuComponent("readx-$kind",label,label) {
                         (pdfView.currentSelection as? TextSelection)?.let {(activity as? PdfActivity)?.annotate(kind,it)}
@@ -465,7 +487,7 @@ class ReadXPdfFragment : PdfViewerFragment() {
         }
         super.onStop()
     }
-    override fun onDestroyView() { overlay=null;currentView = null; super.onDestroyView() }
+    override fun onDestroyView() { overlay=null;filteredView=null;currentView = null; super.onDestroyView() }
 }
 
 @Composable

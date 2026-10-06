@@ -85,7 +85,7 @@ class PdfConversionInstrumentedTest {
         val modelPreferences=app.getSharedPreferences("ocr-models",0)
         val previous=modelPreferences.all.toMap()
         val imported=mutableListOf<File>();val ids=mutableListOf<String>();var result:Book?=null
-        val source=generatedPdf(true,2)
+        val source=generatedPdf(true,4)
         val book=runBlocking {app.repository.import(Uri.fromFile(source))}
         try {
             modelPreferences.edit().clear().commit();app.ocrModels.reload()
@@ -105,7 +105,7 @@ class PdfConversionInstrumentedTest {
                     val resumed=runBlocking {app.conversions.resume(first)};ids+=resumed
                     assertNotEquals(first,resumed)
                     val complete=waitTask(resumed,90000) {it.stage in listOf("COMPLETE","FAILED","WAITING_MODEL")}
-                    assertEquals("COMPLETE",complete.stage);assertEquals(2,complete.completedPages)
+                    assertEquals("COMPLETE",complete.stage);assertEquals(4,complete.completedPages)
                     result=runBlocking {app.repository.dao.book(complete.resultBookId!!)}!!
                     val chapters=runBlocking {app.repository.dao.chapters(result!!.id)}
                     val text=runBlocking {app.repository.dao.textChunk(result!!.id,chapters.first().ordinal,0,200000)}.orEmpty()
@@ -284,7 +284,7 @@ class PdfConversionInstrumentedTest {
         try {
             for(index in 0 until pages) {
                 val page=pdf.startPage(PdfDocument.PageInfo.Builder(600,850,index+1).create())
-                if(scan && index==1) {
+                if(scan && index>0) {
                     val image=Bitmap.createBitmap(1200,1700,Bitmap.Config.ARGB_8888);val canvas=Canvas(image);canvas.drawColor(Color.WHITE)
                     val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.BLACK;textSize=42f}
                     for(line in 0..12) {canvas.drawText(if(line%2==0) "OFFLINE READER OCR EXAMPLE" else "这是离线识别的中文扫描测试。",80f,150f+line*95,paint)}
