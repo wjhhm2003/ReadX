@@ -685,6 +685,7 @@ private fun SettingsSheet(settings: ReaderSettings, update: (ReaderSettings) -> 
                             shape = SegmentedButtonDefaults.itemShape(i, ReadingLayout.entries.size)) { Text(layout.label) }
                     }
                 }
+                ChineseScriptOptions(settings,update)
                 Text("PDF 阅读方式", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PdfReadingLayout.entries.forEach { layout -> FilterChip(selected = layout == settings.pdfLayout,

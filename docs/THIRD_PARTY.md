@@ -79,3 +79,10 @@ Gradle Wrapper 9.3.1、AGP 9.1.0、Compose compiler 2.2.10、KSP 2.3.12 为开�
 - 未新增大型依赖/云OCR/LLM。字体使用Android Typeface与用户自行导入的TTF/OTF，未将用户字体作为MIT资源分发；Markdown/TXT批注导出不打包字体。
 - 在线下载沿用固定官方 tessdata_fast 4.1.0 清单/提交/SHA-256与Apache-2.0模型许可；仅将清单复制到普通assets，模型二进制仍不进Git。用户明确开启并点击下载后才访问raw.githubusercontent.com，关闭中断未完成任务，本地导入与内置版继续保留。
 - 选区气泡、裁边手柄与磁吸为ReadX原创Compose/Kotlin实现；不复制KOReader或引入Lua/C++运行时。Unicode边界使用平台BreakIterator与Chromium Intl.Segmenter，有启发式限制，不宣传通用中文语义模型。
+
+
+## 繁简转换字典（0.7.4）
+
+- 仅打包 [BYVoid/OpenCC 1.1.9](https://github.com/BYVoid/OpenCC/tree/ver.1.1.9) 的 `STCharacters.txt`、`STPhrases.txt`、`TSCharacters.txt`、`TSPhrases.txt`；固定提交 `556ed22496d650bd0b13b6c163be9814637970ae`，各文件大小/SHA-256 见 `app/src/main/assets/chinese/manifest.json`。资源保留上游原文，不重新授权为 MIT。
+- Apache-2.0，保留上游完整 `LICENSE` 到 `app/src/main/assets/licenses/OpenCC.txt` 并在应用离线许可页可见。作者/贡献者归 BYVoid / OpenCC 项目。
+- ReadX 自己实现长度保持的最长词组显示转换，只使用上游首选候选，未打包 OpenCC C++ 引擎；不声称完整官方引擎、全部变长扩展字、地区词汇或跨样式节点转换。

@@ -59,11 +59,11 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
     var panel by rememberSaveable(session.book.id) {mutableStateOf<ReaderPanel?>(null)}
     var page by remember(session.book.id,session.navigationId,settings.layout) {mutableIntStateOf(1)}
     val density = LocalDensity.current
-    var chapterPages by remember(session.book.id,session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,density) {mutableIntStateOf(0)}
+    var chapterPages by remember(session.book.id,session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,settings.textScript,density) {mutableIntStateOf(0)}
     var fraction by remember(session.book.id,session.navigationId) {mutableFloatStateOf(session.fraction)}
     var viewport by remember(session.book.id) {mutableStateOf(0 to 0)}
-    var foregroundPages by remember(session.book.id,session.navigationId,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,density) {mutableStateOf<Int?>(null)}
-    var index by remember(session.book.id,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,density) {mutableStateOf<BookPageIndex?>(null)}
+    var foregroundPages by remember(session.book.id,session.navigationId,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,settings.textScript,density) {mutableStateOf<Int?>(null)}
+    var index by remember(session.book.id,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,settings.textScript,density) {mutableStateOf<BookPageIndex?>(null)}
     var error by remember {mutableStateOf<String?>(null)}
     var retry by remember {mutableIntStateOf(0)}
     var seeking by remember(session.book.id,viewport,settings.layout) {mutableStateOf<Float?>(null)}
@@ -216,7 +216,7 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
         val primary=rows.firstOrNull {it.id==picked.primaryId} ?: rows.maxByOrNull {maxOf(it.updatedAt,it.createdAt)}
         ReaderSelectionPopup(picked,controller,settings.annotationColor,primary,
             onColor={value->vm.preferences.update(settings.copy(annotationColor=value));if(picked.fromMark && primary!=null) vm.recolorAnnotation(primary,value)},
-            copy={val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager;clipboard.setPrimaryClip(ClipData.newPlainText("ReadX 选段",picked.anchor.quote));clearSelection();vm.notify("已复制所选文字")},
+            copy={val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager;clipboard.setPrimaryClip(ClipData.newPlainText("ReadX 选段",picked.displayQuote));clearSelection();vm.notify("已复制所选文字")},
             highlight={vm.addTextAnnotation("HIGHLIGHT",picked.anchor,"",fraction);clearSelection()},
             underline={vm.addTextAnnotation("UNDERLINE",picked.anchor,"",fraction);clearSelection()},
             note={val old=primary?.takeIf {it.kind=="NOTE"} ?: rows.filter {it.kind=="NOTE"}.maxByOrNull {maxOf(it.updatedAt,it.createdAt)};noteDraft=ReaderNoteDraft(picked.anchor,old?.note ?: primary?.note.orEmpty(),old);clearSelection()},
@@ -295,6 +295,8 @@ private fun ReaderTypePanel(settings:ReaderSettings,update:(ReaderSettings)->Uni
     var line by remember(settings.lineHeight) {mutableFloatStateOf(settings.lineHeight)}
     val current by rememberUpdatedState(settings)
     Column(Modifier.padding(horizontal=20.dp,vertical=12.dp)) {
+        ChineseScriptOptions(settings,update)
+        Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {Text("字体大小 ${size.toInt()}",Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);TextButton(onClick=more) {Text("全部设置")}}
         Slider(size,{size=it},onValueChangeFinished={update(current.copy(fontSize=size))},valueRange=14f..32f,steps=17,modifier=Modifier.testTag("font-size-slider"))
         Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {

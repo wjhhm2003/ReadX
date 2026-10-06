@@ -66,17 +66,17 @@ internal class NativeTextSource private constructor(val directory: File, val len
     }
     suspend fun find(term:String,occurrence:Int):Pair<Int,Int>? {
         var from=0;var found=0
-        while(from<length) {
-            coroutineContext.ensureActive();val block=read(from,16384+term.length);var at=0
-            while(true) {at=block.indexOf(term,at,true);if(at<0 || at>=16384) break;if(found++==occurrence) return from+at to from+at+term.length;at+=term.length}
+        while(from<canonicalLength) {
+            coroutineContext.ensureActive();val block=canonical(from,16384+term.length);var at=0
+            while(true) {at=block.indexOf(term,at,true);if(at<0 || at>=16384) break;if(found++==occurrence) return toDisplay(from+at) to toDisplay(from+at+term.length);at+=term.length}
             from+=16384
         };return null
     }
     companion object {
         private val lock=Mutex()
-        suspend fun open(root:File,book:String,chapter:Int,html:File):NativeTextSource=withContext(Dispatchers.IO) {lock.withLock {
+        suspend fun open(root:File,book:String,chapter:Int,html:File,script:ChineseScript=ChineseScript.ORIGINAL,assets:android.content.res.AssetManager?=null):NativeTextSource=withContext(Dispatchers.IO) {lock.withLock {
             require(book.matches(Regex("[0-9a-fA-F-]{36}")))
-            val parent=File(root,"native-text-v1/$book").apply {mkdirs()};val dir=File(parent,"$chapter")
+            val parent=File(root,"native-text-v1/$book").apply {mkdirs()};val dir=File(parent,if(script==ChineseScript.ORIGINAL) "$chapter" else "$chapter-${script.name}-${ChineseText.VERSION}")
             fun load():NativeTextSource?=runCatching {DataInputStream(File(dir,"index").inputStream().buffered()).use {i->
                 require(i.readInt()==0x52585431);require(i.readLong()==html.length() && i.readLong()==html.lastModified())
                 val n=i.readInt();val c=i.readInt();val count=i.readInt();require(n in 1..64000000 && c in 1..64000000 && count in 1..1000000)
@@ -84,6 +84,8 @@ internal class NativeTextSource private constructor(val directory: File, val len
                 val runs=List(count) {Run(i.readInt(),i.readInt(),i.readInt())};NativeTextSource(dir,n,c,runs)
             }}.getOrNull()
             load()?.let {return@withLock it}
+            val indexingContext=currentCoroutineContext()
+            val converter=if(script==ChineseScript.ORIGINAL)null else ChineseText.dictionary(requireNotNull(assets),script) {indexingContext.ensureActive()}
             val temp=Files.createTempDirectory(parent.toPath(),"index-").toFile()
             try {
                 var canonical=0;var display=0;var inBody=false;var keep=false
@@ -92,8 +94,20 @@ internal class NativeTextSource private constructor(val directory: File, val len
                     OutputStreamWriter(File(temp,"display").outputStream().buffered(),Charsets.UTF_16BE).use {d->
                         html.bufferedReader().use {reader->
                             val token=StringBuilder();var tag=false;var processed=0
-                            fun emit() {if(token.isEmpty())return;val value=Parser.unescapeEntities(token.toString(),false);token.clear();if(!inBody)return
-                                c.write(value);if(keep) {runs.add(Run(display,canonical,value.length));d.write(value);display+=value.length};canonical+=value.length
+                            var pending=""
+                            fun emit(final:Boolean=true) {
+                                val value=Parser.unescapeEntities(token.toString(),false);token.clear()
+                                if(!inBody)return
+                                c.write(value)
+                                if(keep) {
+                                    val input=pending+value
+                                    var limit=if(final || converter==null)input.length else (input.length-converter.maxLength+1).coerceAtLeast(0)
+                                    if(limit in 1 until input.length && input[limit-1].isHighSurrogate() && input[limit].isLowSurrogate())limit--
+                                    val shown=converter?.convert(input,limit) ?: input
+                                    if(shown.isNotEmpty()) {runs.add(Run(display,canonical-pending.length,shown.length));d.write(shown);display+=shown.length}
+                                    pending=input.substring(shown.length)
+                                }
+                                canonical+=value.length
                             }
                             while(true) {
                                 val n=reader.read();if(n<0)break;val ch=n.toChar()
@@ -103,7 +117,7 @@ internal class NativeTextSource private constructor(val directory: File, val len
                                     when {name=="body" || name.startsWith("body ")->inBody=true;name=="/body"->inBody=false
                                         name=="h1" || name.startsWith("h1 ") || name=="p" || name.startsWith("p ")->keep=true
                                         name=="/p" || name=="/h1"->{keep=false;d.write("\n\n");display+=2}}
-                                } else {token.append(ch);if(!tag && token.length>=4096 && ch==';')emit();else if(!tag && token.length>=8192 && token.lastIndexOf("&")<token.length-16)emit()}
+                                } else {token.append(ch);if(!tag && token.length>=4096 && ch==';')emit(false);else if(!tag && token.length>=8192 && token.lastIndexOf("&")<token.length-16)emit(false)}
                                 if(++processed%8192==0) coroutineContext.ensureActive()
                             };emit()
                         }

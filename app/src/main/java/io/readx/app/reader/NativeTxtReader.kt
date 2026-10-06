@@ -239,12 +239,15 @@ class NativeReaderView(context:Context):View(context) {
     private fun publishSelection(ids:List<String> = emptyList(),fromMark:Boolean=false) {
         val e=engine ?: return;val a=startSelection ?: return;val b=endSelection ?: return
         scope.launch {
-            val anchor=withContext(Dispatchers.IO) {e.source.anchor(minOf(a,b),maxOf(a,b))}
+            val (anchor,displayQuote)=withContext(Dispatchers.IO) {
+                val value=e.source.anchor(minOf(a,b),maxOf(a,b))
+                value to if(value!=null)e.source.read(minOf(a,b),kotlin.math.abs(b-a)) else ""
+            }
             if(anchor==null) {onFailure?.invoke("选段最多 16384 个 UTF-16 单位，且不能跨章节");return@launch}
             if(startSelection!=a || endSelection!=b)return@launch
             val p=point(minOf(a,b));val q=point(maxOf(a,b));val d=resources.displayMetrics.density
             val rect=Rect((p?.first ?: e.margin)/d,((p?.second ?: e.top)-e.paint.textSize)/d,(q?.first ?: width-e.margin).coerceAtLeast(p?.first ?: e.margin)/d,(q?.second ?: height-e.top)/d)
-            onSelection?.invoke(ReaderSelection(anchor,rect,ids,fromMark,ids.firstOrNull()))
+            onSelection?.invoke(ReaderSelection(anchor,rect,ids,fromMark,ids.firstOrNull(),displayQuote))
         }
     }
     override fun onDraw(canvas:Canvas) {
@@ -351,20 +354,20 @@ class NativeReaderView(context:Context):View(context) {
     }
 }
 
-internal fun nativeLayoutKey(session:ReaderSession,settings:ReaderSettings,w:Int,h:Int,d:Float,f:Float)=LayoutConfig(session.book.fingerprint,session.chapters.map {it.href},w,h,d,f,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,"none",android.os.Build.FINGERPRINT,android.os.LocaleList.getDefault().toLanguageTags(),"staticlayout-v3",fontId=settings.fontId).generateKey()
+internal fun nativeLayoutKey(session:ReaderSession,settings:ReaderSettings,w:Int,h:Int,d:Float,f:Float)=LayoutConfig(session.book.fingerprint,session.chapters.map {it.href},w,h,d,f,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,"none",android.os.Build.FINGERPRINT,android.os.LocaleList.getDefault().toLanguageTags(),"staticlayout-v3",fontId=settings.fontId,textScript=settings.textScript.name+"@"+ChineseText.VERSION).generateKey()
 
 @Composable
 fun NativeTxtReader(session:ReaderSession,settings:ReaderSettings,repository:LibraryRepository,foreground:String,background:String,modifier:Modifier,annotations:List<Annotation>,controller:ReaderController,onViewport:(Int,Int)->Unit,onTap:(Int)->Unit,onSelection:(ReaderSelection?)->Unit,onPosition:(Float,Boolean,Int,Int)->Unit,onReady:(Int)->Unit,onBoundary:(Int)->Unit,notify:(String)->Unit,onIndex:(BookPageIndex?,String?)->Unit) {
     val d=LocalDensity.current
     var view by remember {mutableStateOf<NativeReaderView?>(null)}
     var viewport by remember {mutableStateOf(0 to 0)}
-    var foregroundReady by remember(session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId) {mutableStateOf(false)}
+    var foregroundReady by remember(session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,settings.textScript) {mutableStateOf(false)}
     val latestPosition by rememberUpdatedState(onPosition);val latestSelection by rememberUpdatedState(onSelection);val latestTap by rememberUpdatedState(onTap);val latestBoundary by rememberUpdatedState(onBoundary);val latestNotify by rememberUpdatedState(notify)
     AndroidView(modifier=modifier,factory={context->NativeReaderView(context).also {v->view=v;controller.native=v
         v.onPosition={a,b,c,e->latestPosition(a,b,c,e)};v.onSelection={latestSelection(it)};v.onTap={latestTap(it)};v.onBoundary={latestBoundary(it)};v.onFailure={latestNotify(it)}
         v.addOnLayoutChangeListener {_,l,t,r,b,_,_,_,_->if(r-l>0 && b-t>0){viewport=(r-l) to (b-t);onViewport(r-l,b-t)}}
     }},update={v->v.ink=android.graphics.Color.parseColor(foreground);v.paper=android.graphics.Color.parseColor(background);v.paged=settings.layout==ReadingLayout.PAGED;v.invalidate()},onRelease={v->if(controller.native===v)controller.native=null;v.release()})
-    LaunchedEffect(view,viewport,session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,d) {
+    LaunchedEffect(view,viewport,session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,settings.textScript,d) {
         val v=view ?: return@LaunchedEffect;if(viewport.first<=0 || viewport.second<=0)return@LaunchedEffect
         val newNavigation=v.navigationId!=session.navigationId
         val old=v.viewportAnchor.takeIf {v.navigationId==session.navigationId}
@@ -372,7 +375,7 @@ fun NativeTxtReader(session:ReaderSession,settings:ReaderSettings,repository:Lib
         try {
             LocalFontStore.prepare(v.context,settings.fontId)
             NativeWork.foreground()
-            val source=NativeTextSource.open(v.context.cacheDir,session.book.id,session.chapter,BookParser.safeFile(repository.content(session.book.id),session.chapters[session.chapter].href))
+            val source=NativeTextSource.open(v.context.cacheDir,session.book.id,session.chapter,BookParser.safeFile(repository.content(session.book.id),session.chapters[session.chapter].href),settings.textScript,v.context.assets)
             ReaderPerformance.mark("text_index")
             val key=nativeLayoutKey(session,settings,viewport.first,viewport.second,d.density,d.fontScale)
             val engine=withContext(Dispatchers.IO) {NativePaginator(source,settings,viewport.first,viewport.second,d.density,d.fontScale,v.context.cacheDir,layoutDigest(key+session.chapter))}
@@ -395,7 +398,7 @@ fun NativeTxtReader(session:ReaderSession,settings:ReaderSettings,repository:Lib
     }
     LaunchedEffect(view,annotations,foregroundReady) {if(foregroundReady)view?.updateMarks(annotations)}
     // One cancellable task for the entire book, separate from foreground page rendering.
-    LaunchedEffect(session.book.id,session.chapter,viewport,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,d) {
+    LaunchedEffect(session.book.id,session.chapter,viewport,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,settings.textScript,d) {
         val v=snapshotFlow {view}.filter {it!=null}.first()!!
         if(viewport.first<=0 || viewport.second<=0)return@LaunchedEffect
         snapshotFlow {foregroundReady}.filter {it}.first()
@@ -406,7 +409,7 @@ fun NativeTxtReader(session:ReaderSession,settings:ReaderSettings,repository:Lib
             for(ordinal in chapterPriority(session.chapters.size,session.chapter)) {
                 if(index.counts[ordinal]!=null && !(ordinal==v.chapterOrdinal && v.engine?.count==null))continue
                 NativeWork.backgroundYield()
-                val source=NativeTextSource.open(v.context.cacheDir,session.book.id,ordinal,BookParser.safeFile(repository.content(session.book.id),session.chapters[ordinal].href))
+                val source=NativeTextSource.open(v.context.cacheDir,session.book.id,ordinal,BookParser.safeFile(repository.content(session.book.id),session.chapters[ordinal].href),settings.textScript,v.context.assets)
                 val engine=withContext(Dispatchers.IO) {NativePaginator(source,settings,viewport.first,viewport.second,d.density,d.fontScale,v.context.cacheDir,layoutDigest(key+ordinal))}
                 try {
                     var batch=0

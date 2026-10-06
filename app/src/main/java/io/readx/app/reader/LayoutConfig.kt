@@ -19,11 +19,12 @@ data class LayoutConfig(
     val locales: String,
     val engineVersion: String = "columns-v8",
     val fontId:String?=null,
+    val textScript:String="ORIGINAL",
 ) {
     fun generateKey(): String {
         // Length-prefix components: hrefs containing separators must not alias another chapter list.
         val values = listOf(engineVersion, bookFingerprint, viewportWidth, viewportHeight, density,
-            fontScale, fontSize, lineHeight, margin, serif, fontId.orEmpty(), webViewVersion, systemVersion, locales).map { it.toString() } + chapterHrefs
+            fontScale, fontSize, lineHeight, margin, serif, fontId.orEmpty(), textScript, webViewVersion, systemVersion, locales).map { it.toString() } + chapterHrefs
         return layoutDigest(values.joinToString("") { "${it.length}:$it" })
     }
 }

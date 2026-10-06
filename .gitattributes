@@ -6,3 +6,6 @@ gradlew text eol=lf
 *.jpg binary
 *.jar binary
 *.traineddata binary
+
+# Fixed upstream dictionaries must retain LF for reproducible SHA-256 checks.
+app/src/main/assets/chinese/*.txt text eol=lf

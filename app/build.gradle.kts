@@ -14,8 +14,8 @@ android {
         applicationId = "io.readx.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 15
-        versionName = if (bundledOcr) "0.7.3-ocr" else "0.7.3"
+        versionCode = 16
+        versionName = if (bundledOcr) "0.7.4-ocr" else "0.7.4"
         buildConfigField("boolean", "BUNDLED_OCR", bundledOcr.toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -98,3 +98,27 @@ if (bundledOcr) {
     }
     tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(verifyModels) }
 }
+
+
+// Offline display dictionaries are source assets, not OCR models or a runtime download.
+val verifyChineseDictionaries = tasks.register("verifyChineseDictionaries") {
+    val assets=layout.projectDirectory.dir("src/main/assets/chinese")
+    inputs.dir(assets)
+    doLast {
+        val manifest=groovy.json.JsonSlurper().parse(assets.file("manifest.json").asFile) as Map<*, *>
+        val files=manifest["files"] as Map<*, *>
+        for(name in listOf("STCharacters.txt","STPhrases.txt","TSCharacters.txt","TSPhrases.txt")) {
+            val entry=files[name] as Map<*, *>
+            val file=assets.file(name).asFile
+            check(file.isFile && file.length()==(entry["bytes"] as Number).toLong()) {"Chinese dictionary size mismatch: $name"}
+            val digest=MessageDigest.getInstance("SHA-256")
+            file.inputStream().use {input->
+                val buffer=ByteArray(65536)
+                while(true) {val n=input.read(buffer);if(n<0)break;digest.update(buffer,0,n)}
+            }
+            val hash=digest.digest().joinToString("") {"%02x".format(it)}
+            check(hash==entry["sha256"]) {"Chinese dictionary SHA-256 mismatch: $name"}
+        }
+    }
+}
+tasks.matching {it.name=="preBuild"}.configureEach {dependsOn(verifyChineseDictionaries)}

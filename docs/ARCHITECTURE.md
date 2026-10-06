@@ -246,3 +246,15 @@ PDF Activity 的原生根布局独占 systemBars/displayCutout/IME 安全区；�
 - 按原页顺序等待结果并原子保存，completedPages 仍代表可恢复的连续前缀，不把异步完成页号冒充进度。模型快照、质量阈值和原图回退不变；取消会在当前不可中断的 native 识别调用返回后释放资源，未承诺立即中断每一次 native 调用。
 
 - 连续列表使用实际 LazyListLayoutInfo 中可见面积最大的页报告当前位置；末页不足一屏时不会被前一页残留部分反写页码。跳转请求归零仅消费请求，不再次跳回初始书签；裁边配置变化才重新恢复视口。
+
+
+## 0.7.4 繁简显示层（2026-10-07）
+
+- `ChineseScript` 提供 ORIGINAL/SIMPLIFIED/TRADITIONAL，ReaderPreferences 保存全局阅读偏好，默认原文；不改 Book/Chapter/Room schema，不修改 TXT/EPUB 私有源副本或导出内容，不作用于 PDF。
+- 固定 OpenCC 1.1.9 的 ST/TS Characters/Phrases 文本字典；版本、提交、字节数与 SHA-256 见 assets/chinese/manifest.json，Apache-2.0 原文随应用可离线查看。ReadX 实现紧凑数组 trie，最长词组匹配优先、采用上游首选目标；最多两份按需构建的字典，HTML 请求线程/原生索引 IO 线程加载，不在 Compose 绘制中读取字典，不增加 native/JAR 大依赖。
+- 保留 canonical DOM UTF-16 定位：仅纳入目标与源 UTF-16 长度相等的映射；长度改变的少数扩展字保持源形式。这是有意的兼容边界，不是完整 OpenCC 引擎/所有地区配置。UTF-16 长度相同不代表字宽或页数相同，因此布局缓存包含转换模式与字典版本，切换沿用原文锚点捕获/恢复并重新测量实际页数。
+- Web 路径先做既有 HTML 清理与正常序列化，再解析该正常 DOM、关闭第二次 prettyPrint，仅转换正文 text nodes。新增 inline/display:contents 载体存原文 data-readx-source；书籍同名前缀属性先删除。原文与显示都由 jsoup 编码成数据，不拼接可执行脚本，不改 CSS/URL/书籍属性；书籍脚本/CSP/网络限制不变。
+- 受控 reader.js 索引使用原文切片，选区复制另返回显示文本；批注 splitText/normalize 后通过同一转换载体内的累计长度重建原文片段，不以当前显示字形覆盖旧 quote/prefix/suffix。载体长度不一致时退回既有严格校验、不猜测歧义标记。词组不跨 EPUB DOM 文本节点，URL/链接目的地不变。
+- TXT canonical 文件仍为原文，只有 display 文件转换；模式/字典版本隔离派生索引，与既有按 UUID 清理路径兼容。流式 token 块保留最长词组所需尾部，避免 8KiB 索引块边界把“头发”等词拆成不同结果；不整章加载。原生选段复制在 IO 读取显示文字，批注仍从 canonical 建锚点。
+- 搜索结果依然来自原数据库原文：NativeTextSource.find 改为 canonical 搜索并映射回 display，Web 受控脚本也用原文索引，维持已有搜索/目录跳转，不承诺新增繁简等价查询。界面提示全文搜索仍按原文，批注导出也保留原引用。
+- 本轮用户要求只编译，不运行 JVM/设备/UI/性能测试；代码接入与编译不代表多栏/ruby/复杂样式/全部罕见字已经验收。

@@ -122,3 +122,18 @@ internal fun ReadingProgressControl(current:Int?,total:Int?,label:String,onJump:
     }
 }
 
+
+
+@Composable
+internal fun ChineseScriptOptions(settings:ReaderSettings,update:(ReaderSettings)->Unit) {
+    Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
+        Text("繁简转换 · TXT / EPUB",style=MaterialTheme.typography.titleSmall)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            io.readx.app.reader.ChineseScript.entries.forEachIndexed {index,script->
+                SegmentedButton(selected=settings.textScript==script,onClick={update(settings.copy(textScript=script))},
+                    shape=SegmentedButtonDefaults.itemShape(index,3),modifier=Modifier.testTag("text-script-${script.name.lowercase()}")) {Text(script.label)}
+            }
+        }
+        Text("离线转换阅读显示，不改原书、PDF 或批注原文；全文搜索仍按原文。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}

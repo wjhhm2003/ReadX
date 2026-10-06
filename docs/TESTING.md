@@ -298,3 +298,22 @@ P95 使用 nearest-rank，n=10 时取该组最大值。
 | `E:/ReadX/app/build/outputs/apk/preview/app-preview.apk` | 41235265 | `3B31FD10E06B8B141EBD78011E764A64E5E750D1D7D69AEE97772C2B4941FD2C` |
 
 Debug / Preview 同 applicationId，安装会替换现有应用；普通版无内置模型，但保留应用私有目录内已经导入的模型。书库备份未实现，不能把一次模拟器覆盖安装当成完整备份验收。
+
+
+## 0.7.4 EPUB / TXT 繁简显示（2026-10-07，用户要求只编译）
+
+- 用户先要求提交上一轮；已提交 `1adc59c`（PDF 选字/跳页/反色与 OCR 并行），未推送。本轮新增繁简代码留在工作区，未自动提交。
+- versionCode 16，普通版 0.7.4 / 0.7.4-preview。TXT 原生、TXT WebView、EPUB 接入原文/简体/繁体显示，原文批注与显示复制分离，模式/字典版本进入缓存键；固定 OpenCC 文本资源与完整 Apache-2.0 许可入包，无新增网络入口/Room 迁移。
+- 最终执行 `assembleDebug assemblePreview --offline -Pkotlin.incremental=false`，**BUILD SUCCESSFUL**；包含 R8/资源压缩及 AGP 默认必需的 Preview lintVital 构建步骤。字典大小/SHA-256 构建准备检查通过。
+- 首轮编译发现新增显示复制路径引用了未定义 source，已改为 IO 中从 e.source 读取；最终构建来自修复后源码，不交付首轮失败产物。
+- **没有运行** JVM 单元测试、connectedDebugAndroidTest、设备安装启动、UI/性能测试或完整 lintDebug；不把以前 0.7.3 的报告/截图当作 0.7.4 繁简功能通过记录。本轮没有新增“已实测”截图。
+- 切换/重排/恢复、复制、旧批注、原文搜索、复杂 EPUB CSS/ruby/跨节点词组、罕见扩展字与大文件内存均未做本轮运行验收。当前保持 UTF-16 长度的转换不覆盖变长扩展字，全文搜索仍按原文；不宣称完整 OpenCC 所有模式或台港词汇转换。
+
+本轮核实的普通版 APK（同包名，Preview 为本机调试签名）：
+
+| 产物 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `E:/ReadX/app/build/outputs/apk/debug/app-debug.apk` | 120280562 | `79CC5E4C4E6E86769CA0DFFFC2DF4B5589D07A0BE729834CE60CACA8D719C100` |
+| `E:/ReadX/app/build/outputs/apk/preview/app-preview.apk` | 41687421 | `D1FD5A85FDA3590B30313CB6DDAED3EE56C1E8A1FA0C445F0B298299B090517F` |
+
+已读取 Preview 包元数据确认 `io.readx.app` / versionCode 16 / `0.7.4-preview` / min 28 / target 36；这不是设备安装或阅读验收。繁简字典已内置，不需 OCR 模型；普通版仍不内置 OCR 模型。

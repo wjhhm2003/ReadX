@@ -397,7 +397,7 @@ class LocalWebReader(context: Context) : WebView(context) {
 }
 
 object LocalHtml {
-    fun prepare(source: String, settings: ReaderSettings, foreground: String, background: String, viewportWidth: Float = 360f, viewportHeight: Float = 640f, loadGeneration: Long? = null): String {
+    fun prepare(source: String, settings: ReaderSettings, foreground: String, background: String, viewportWidth: Float = 360f, viewportHeight: Float = 640f, loadGeneration: Long? = null, dictionary:ChineseDictionary? = null): String {
         // Preserve measured fractional CSS pixels: initial-scale=1 follows the native density,
         // while viewport meta dimensions are integral. Rounding column widths accumulates drift in long chapters.
         val pageWidth = viewportWidth.coerceAtLeast(1f)
@@ -433,7 +433,16 @@ object LocalHtml {
             a { color: #608874; } ::selection { background: #cbdca0; }
             ${if (settings.layout == io.readx.app.ui.ReadingLayout.PAGED) "html { height: ${pageHeight}px; overflow-y: hidden; } body { width: ${pageWidth}px !important; height: ${pageHeight}px !important; box-sizing: border-box !important; padding: 20px ${settings.margin}px !important; column-width: ${(pageWidth - settings.margin * 2).coerceAtLeast(40f)}px !important; column-gap: ${settings.margin * 2}px !important; column-fill: auto; overflow: visible; } img, svg { max-height: ${(pageHeight - 48).coerceAtLeast(1f)}px; object-fit: contain; break-inside: avoid; } p { orphans: 2; widows: 2; } body::after { content: ''; display: block; width: calc(100% + ${settings.margin}px); height: 1px; margin-top: -1px; }" else "body { height: auto !important; column-width: auto !important; column-count: auto !important; overflow-x: hidden; }"}
         """.trimIndent())
-        return document.outerHtml()
+        val normal=document.outerHtml()
+        if(dictionary==null)return normal
+        // Reparse the NORMAL prepared DOM first: its whitespace is the historical canonical
+        // coordinate system. Disable a second pretty-print pass so inline conversion spans
+        // cannot introduce new body text nodes or change old annotation offsets.
+        val displayed=Jsoup.parse(normal)
+        displayed.outputSettings().prettyPrint(false)
+        ChineseText.prepare(displayed,dictionary)
+        displayed.head().appendElement("style").text("span[data-readx-source] {display:contents !important; color:inherit !important; font:inherit !important; letter-spacing:inherit !important;}")
+        return displayed.outerHtml()
     }
 }
 
@@ -483,7 +492,7 @@ fun WebReader(
                 view.annotationSelected = { kind, anchor -> currentAnnotation(kind, anchor) }
                 if (!view.restoring) view.applyAnnotations(annotations)
                 val fontScale = view.resources.configuration.fontScale
-                val signature = listOf(settings.layout, settings.fontSize, settings.lineHeight, settings.margin, settings.serif,settings.fontId, foreground, background, chapter.href, session.navigationId, fontScale)
+                val signature = listOf(settings.layout, settings.fontSize, settings.lineHeight, settings.margin, settings.serif,settings.fontId,settings.textScript, foreground, background, chapter.href, session.navigationId, fontScale)
                 if (view.tag != signature) {
                     view.finishTransition()
                     val reflowing = view.tag != null
@@ -545,7 +554,7 @@ fun WebReader(
                                 if (!file.isFile) return blocked()
                                 val ext = file.extension.lowercase()
                                 val mime = when(ext) { "html", "htm", "xhtml" -> "text/html"; "css" -> "text/css"; "svg" -> "image/svg+xml"; else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream" }
-                                val stream = if (mime == "text/html") ByteArrayInputStream(LocalHtml.prepare(file.readText(), settings, foreground, background, view.viewportWidthCss, view.viewportHeightCss, issuedGeneration.get()).toByteArray()) else file.inputStream()
+                                val stream = if (mime == "text/html") ByteArrayInputStream(LocalHtml.prepare(file.readText(), settings, foreground, background, view.viewportWidthCss, view.viewportHeightCss, issuedGeneration.get(),ChineseText.dictionary(view.context.assets,settings.textScript)).toByteArray()) else file.inputStream()
                                 WebResourceResponse(mime, if (mime.startsWith("text/")) "UTF-8" else null, stream)
                             } catch (_: Exception) { blocked() }
                         }

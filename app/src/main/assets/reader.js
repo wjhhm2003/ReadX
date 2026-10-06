@@ -9,10 +9,21 @@
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) { return n.parentElement && !n.parentElement.closest('script,style,noscript') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }
     });
-    for (let n; (n = walker.nextNode());) { nodeOffsets.set(n,at); out.push({node:n, start:at, end:at+n.length}); at += n.length; }
+    const owners=new Map();
+    for (let n; (n = walker.nextNode());) {
+      let source=n.data;
+      const owner=n.parentElement.closest('[data-readx-source]');
+      if(owner) {
+        let entry=owners.get(owner);
+        if(!entry) {const original=owner.getAttribute('data-readx-source');entry={original,at:0,valid:original.length===owner.textContent.length};owners.set(owner,entry);}
+        if(entry.valid)source=entry.original.slice(entry.at,entry.at+n.length);
+        entry.at+=n.length;
+      }
+      nodeOffsets.set(n,at);out.push({node:n,source,start:at,end:at+n.length});at+=n.length;
+    }
     nodeCache=out; return out;
   };
-  const text = list => textCache ?? (textCache=list.map(n => n.node.data).join(''));
+  const text = list => textCache ?? (textCache=list.map(n => n.source).join(''));
   function locate(anchor, list) {
     const all = text(list); let start = anchor.start, end = anchor.end;
     if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= all.length && all.slice(start,end) === anchor.quote &&
@@ -139,7 +150,7 @@
   function selectionInfo() {
     const a=selection();if(!a) return null;
     const r=rangeFor(a,nodes());if(!r) return null;
-    return {anchor:a,rect:visibleRect(r),ids:resolvedMarks.filter(m=>m.p.start<a.end && m.p.end>a.start).map(m=>m.a.id),fromMark:false};
+    return {anchor:a,text:r.toString(),rect:visibleRect(r),ids:resolvedMarks.filter(m=>m.p.start<a.end && m.p.end>a.start).map(m=>m.a.id),fromMark:false};
   }
   function markAt(x,y) {
     const element=document.elementFromPoint(x,y), span=element && element.closest('[data-readx-ids]');if(!span) return null;
@@ -147,7 +158,7 @@
     if(!matches.length) return null;
     const chosen=matches.sort((a,b)=>(b.a.updatedAt||0)-(a.a.updatedAt||0))[0];
     const list=nodes(), r=rangeFor(chosen.p,list);if(!r) return null;
-    return {anchor:anchor(chosen.p.start,chosen.p.end,list),rect:visibleRect(r),ids,fromMark:true,primaryId:chosen.a.id};
+    return {anchor:anchor(chosen.p.start,chosen.p.end,list),text:r.toString(),rect:visibleRect(r),ids,fromMark:true,primaryId:chosen.a.id};
   }
   function marks(items) {
     document.querySelectorAll('[data-readx-mark]').forEach(e => e.replaceWith(...e.childNodes));

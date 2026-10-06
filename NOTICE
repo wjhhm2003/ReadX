@@ -61,3 +61,13 @@ Application asset licence copies are at app/src/main/assets/licenses;
 upstream version/provenance and hashes are in docs/THIRD_PARTY.md and
 app/src/ocrBundled/assets/ocr/manifest.json. Nothing here implies upstream
 authors endorse ReadX, nor does ReadX's MIT licence cover users' books.
+
+
+Chinese script display dictionaries
+----------------------------------
+OpenCC 1.1.9, BYVoid and contributors: Apache-2.0.
+Only STCharacters, STPhrases, TSCharacters and TSPhrases data are included,
+unmodified from commit 556ed22496d650bd0b13b6c163be9814637970ae.
+The full upstream licence is assets/licenses/OpenCC.txt; provenance and hashes
+are in assets/chinese/manifest.json. ReadX supplies its own length-preserving
+phrase matcher; the OpenCC native engine is not bundled.

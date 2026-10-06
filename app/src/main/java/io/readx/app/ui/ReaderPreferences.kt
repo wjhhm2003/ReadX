@@ -1,5 +1,6 @@
 package io.readx.app.ui
 
+import io.readx.app.reader.ChineseScript
 import android.content.Context
 import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +34,7 @@ data class ReaderSettings(
     val shelfGrid:Boolean=false,
     val shelfSort:String="RECENT",
     val appTheme:ReadingTheme=ReadingTheme.SYSTEM,
+    val textScript:ChineseScript=ChineseScript.ORIGINAL,
 )
 
 class ReaderPreferences(private val context: Context) {
@@ -56,6 +58,7 @@ class ReaderPreferences(private val context: Context) {
         onlineModels=prefs.getBoolean("onlineModels",false),
         shelfGrid=prefs.getBoolean("shelfGrid",false),
         shelfSort=prefs.getString("shelfSort","RECENT").orEmpty(),
+        textScript=ChineseScript.entries.firstOrNull {it.name==prefs.getString("textScript","ORIGINAL")} ?: ChineseScript.ORIGINAL,
         appTheme=ReadingTheme.entries.firstOrNull {it.name==prefs.getString("appTheme","SYSTEM")} ?: ReadingTheme.SYSTEM,
     )
     private val state = MutableStateFlow(read())
@@ -75,6 +78,6 @@ class ReaderPreferences(private val context: Context) {
             .putFloat("fontSize", value.fontSize).putFloat("lineHeight", value.lineHeight)
             .putFloat("margin", value.margin).putBoolean("serif", value.serif)
             .putBoolean("onlineModels",value.onlineModels).putString("fontId",value.fontId).putBoolean("shelfGrid",value.shelfGrid).putString("shelfSort",value.shelfSort)
-            .putString("appTheme",value.appTheme.name).apply()
+            .putString("textScript",value.textScript.name).putString("appTheme",value.appTheme.name).apply()
     }
 }

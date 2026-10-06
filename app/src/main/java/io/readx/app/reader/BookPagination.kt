@@ -53,10 +53,10 @@ fun BookPageCounter(book: Book, chapters: List<Chapter>, settings: ReaderSetting
     val webVersion = remember { WebView.getCurrentWebViewPackage()?.let { "${it.packageName}:${it.versionName}" }.orEmpty() }
     val locales = LocalConfiguration.current.locales.toLanguageTags()
     val config = remember(book.fingerprint, chapters, viewport, density, fontScale, settings.fontSize,
-        settings.lineHeight, settings.margin, settings.serif, settings.fontId, webVersion, locales) {
+        settings.lineHeight, settings.margin, settings.serif, settings.fontId, settings.textScript, webVersion, locales) {
         LayoutConfig(book.fingerprint, chapters.map { it.href }, viewport.first, viewport.second, density,
             fontScale, settings.fontSize, settings.lineHeight, settings.margin, settings.serif,
-            webVersion, Build.FINGERPRINT, locales,fontId=settings.fontId)
+            webVersion, Build.FINGERPRINT, locales,fontId=settings.fontId,textScript=settings.textScript.name+"@"+ChineseText.VERSION)
     }
     val layoutKey = remember(config) { config.generateKey() }
     val cache = remember { PageIndexCache(context.applicationContext.cacheDir) }
@@ -106,7 +106,7 @@ fun BookPageCounter(book: Book, chapters: List<Chapter>, settings: ReaderSetting
                             val file = BookParser.safeFile(content, uri.path!!.removePrefix("/content/"))
                             if (!file.isFile) return denied()
                             val mime = when (file.extension.lowercase()) { "html", "xhtml", "htm" -> "text/html"; "css" -> "text/css"; "svg" -> "image/svg+xml"; else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension) ?: "application/octet-stream" }
-                            val stream = if (mime == "text/html") ByteArrayInputStream(LocalHtml.prepare(file.readText(), settings, "#111111", "#ffffff", viewport.first / density, viewport.second / density, load).toByteArray()) else file.inputStream()
+                            val stream = if (mime == "text/html") ByteArrayInputStream(LocalHtml.prepare(file.readText(), settings, "#111111", "#ffffff", viewport.first / density, viewport.second / density, load,ChineseText.dictionary(view.context.assets,settings.textScript)).toByteArray()) else file.inputStream()
                             WebResourceResponse(mime, if (mime.startsWith("text/")) "UTF-8" else null, stream)
                         } catch (_: Exception) { denied() }
                     }
