@@ -107,6 +107,11 @@ ReadX 提供两种 Preview APK 供选择（均使用包名 `io.readx.app`，安�
 
 产物路径：`app/build/outputs/apk/preview/app-preview.apk`。
 
+#### CI/CD 自动构建 (GitHub Actions)
+本项目已配置 GitHub Actions 自动构建工作流（位于 `.github/workflows/build.yml`）：
+- **触发时机**：当代码被 `push` 或提交 `pull_request` 到 `main` / `master` 分支时，后台会自动运行单元测试并编译 APK。
+- **获取 APK**：构建完成后，可在 GitHub 仓库页面的 **Actions** 标签页中找到对应的 Workflow 运行记录，在页面的 **Artifacts** 区域下载生成的 `ReadX-APKs` 压缩包（内含 `app-debug.apk` 及 `app-preview.apk`）。
+
 #### 设备测试
 ```powershell
 adb devices
