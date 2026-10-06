@@ -30,8 +30,18 @@ import java.io.ByteArrayInputStream
 /** Local-only WebView. Book scripts blocked by CSP; only bundled native-evaluated code, no JS bridge or network. */
 class ReaderController {
     internal var view: LocalWebReader? = null
-    fun turn(direction: Int) { view?.turn(direction) }
-    fun jumpToPage(page: Int) { view?.jumpToPage(page) }
+    internal var native: NativeReaderView? = null
+    fun captureAnchor(callback: (TextAnchor?) -> Unit) { native?.captureAnchor(callback) ?: view?.captureViewportAnchor(callback) ?: callback(null) }
+    fun clearSelection() { native?.clearSelection(); view?.clearReaderSelection() }
+    fun selectionPage(direction:Int) {
+        native?.turn(direction)
+        view?.let {v->v.trusted("window.ReadX.preserveSelection(${v.paged},$direction)") {v.report();v.showSelectionPopup()}}
+    }
+    fun snapSelection(unit:SelectionUnit) {native?.snapSelection(unit);view?.showSelectionPopup("window.ReadX.snapSelection(${JSONObject.quote(unit.name)})")}
+    fun extendSelection(direction:Int) {view?.showSelectionPopup("window.ReadX.extendSelection($direction)")}
+    fun report() { native?.report(); view?.finishTransition(); view?.report() }
+    fun turn(direction: Int) { native?.turn(direction) ?: view?.turn(direction) }
+    fun jumpToPage(page: Int) { native?.jumpToPage(page) ?: view?.jumpToPage(page) }
     fun selection(callback: (TextAnchor?) -> Unit) { view?.readAnchor("window.ReadX.selection()", callback) ?: callback(null) }
     fun restoreAnchor(anchor: TextAnchor) { view?.navigateAnchor(anchor) }
 
@@ -101,12 +111,16 @@ class LocalWebReader(context: Context) : WebView(context) {
     }
     fun applyAnnotations(annotations: List<Annotation>, finished: () -> Unit = {}) {
         if (annotationGeneration == loadGeneration && displayedAnnotations == annotations) { finished(); return }
+        val hadMarks = displayedAnnotations?.any { it.kind != "BOOKMARK" } == true
+        fun structure(rows: List<Annotation>)=rows.filter {it.kind!="BOOKMARK"}.map {Triple(it.id,it.kind,it.locator)}
+        val restyle=annotationGeneration==loadGeneration && displayedAnnotations?.let {structure(it)==structure(annotations)}==true
         annotationGeneration = loadGeneration; displayedAnnotations = annotations.toList()
+        if (annotations.none { it.kind != "BOOKMARK" } && !hadMarks) { finished(); return }
         val items = JSONArray()
         annotations.filter { it.kind != "BOOKMARK" }.forEach { annotation ->
             TextAnchor.parse(annotation.locator)?.let { anchor -> items.put(JSONObject().put("id", annotation.id).put("kind", annotation.kind).put("anchor", anchor.json()).put("color",annotation.color).put("updatedAt",maxOf(annotation.updatedAt,annotation.createdAt))) }
         }
-        trusted("window.ReadX.marks($items)") { finished() }
+        trusted("window.ReadX.${if(restyle) "restyle" else "marks"}($items)") { finished() }
     }
     fun bindWindowActionMode(mode: ActionMode) {
         windowActionMode=mode;selectionActive=true
@@ -267,9 +281,15 @@ class LocalWebReader(context: Context) : WebView(context) {
         if (next in 1..total) animateTo((next - 1) * width)
         else crossBoundary(direction)
     }
+    private var lastAnchorPosition: Pair<Int,Int>? = null
     fun report() {
         if (restoring || released || pageAnimator != null || consumedSwipe) return
         val (current, total) = pageInfo(); lastFraction = fraction()
+        val position=scrollX to scrollY
+        if(position!=lastAnchorPosition) {
+            lastAnchorPosition=position
+            captureViewportAnchor {anchor->if((scrollX to scrollY)==position) {sourceAnchor=anchor;reportPosition?.invoke(lastFraction,current,total)}}
+        }
         reportPosition?.invoke(lastFraction, current, total)
     }
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
@@ -306,7 +326,8 @@ class LocalWebReader(context: Context) : WebView(context) {
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (restoring) return true
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) { finishTransition(); linkOriginFraction = fraction(); readAnchor("window.ReadX.viewportAnchor()") { sourceAnchor = it } }
+        if (event.actionMasked in listOf(MotionEvent.ACTION_DOWN,MotionEvent.ACTION_MOVE,MotionEvent.ACTION_UP)) WebReadingPriority.input()
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) { finishTransition(); linkOriginFraction = fraction() }
         if(event.actionMasked==MotionEvent.ACTION_DOWN) {downX=event.x;downY=event.y;downTime=event.eventTime}
         if(selectionActive) {
             val handled=super.onTouchEvent(event)
@@ -397,10 +418,12 @@ object LocalHtml {
         document.head().appendElement("meta").attr("name", "viewport").attr("content", "width=${pageWidth.toInt()}, height=${pageHeight.toInt()}, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no")
         // The net-zero-height paged tail includes the final right margin in Chromium's scroll range.
         // Without it, scrollTo(lastPage * width) is clamped short and the last column is misaligned.
+        val localFont=settings.fontId?.takeIf {it.matches(Regex("[0-9a-f]{64}"))}
+        if(localFont!=null) document.head().appendElement("style").text("@font-face {font-family: ReadXLocal; src: url('https://appassets.androidplatform.net/reader-fonts/$localFont.font'); font-display: block;}")
         document.head().appendElement("style").text("""
             html { background: $background !important; color: $foreground !important; }
             body { margin: 0 !important; padding: 24px ${settings.margin}px 64px !important;
-              font-family: ${if(settings.serif) "serif" else "sans-serif"} !important;
+              font-family: ${if(settings.fontId?.matches(Regex("[0-9a-f]{64}"))==true) "ReadXLocal, " else ""}${if(settings.serif) "serif" else "sans-serif"} !important;
               font-size: ${settings.fontSize}px !important; line-height: ${settings.lineHeight} !important;
               overflow-wrap: anywhere; }
             body, p, div, span, li { color: $foreground !important; background-color: transparent !important; }
@@ -460,7 +483,7 @@ fun WebReader(
                 view.annotationSelected = { kind, anchor -> currentAnnotation(kind, anchor) }
                 if (!view.restoring) view.applyAnnotations(annotations)
                 val fontScale = view.resources.configuration.fontScale
-                val signature = listOf(settings.layout, settings.fontSize, settings.lineHeight, settings.margin, settings.serif, foreground, background, chapter.href, session.navigationId, fontScale)
+                val signature = listOf(settings.layout, settings.fontSize, settings.lineHeight, settings.margin, settings.serif,settings.fontId, foreground, background, chapter.href, session.navigationId, fontScale)
                 if (view.tag != signature) {
                     view.finishTransition()
                     val reflowing = view.tag != null
@@ -514,6 +537,7 @@ fun WebReader(
                         }
                         override fun shouldInterceptRequest(webView: WebView, request: WebResourceRequest): WebResourceResponse {
                             val uri = request.url
+                            if(uri.scheme=="https" && uri.host=="appassets.androidplatform.net") LocalFontStore.response(view.context,uri.path.orEmpty())?.let {return it}
                             if (uri.scheme != "https" || uri.host != "appassets.androidplatform.net" || !uri.path.orEmpty().startsWith("/content/")) return blocked()
                             return try {
                                 val relative = uri.path!!.removePrefix("/content/")
@@ -555,6 +579,7 @@ fun WebReader(
                             val generation = view.loadGeneration
                             fun active() = view.tag == signature && view.isCurrentLoad(generation)
                             fun restorePosition() {
+                                ReaderPerformance.mark("layout")
                                 if (!active()) return
                                 // Fragment navigation must remain at its target. Never restore the source fraction afterwards.
                                 if (target == "__readx_end__") view.restore(1f)
@@ -563,17 +588,21 @@ fun WebReader(
                                 view.initializeTrusted {
                                     if (!active()) return@initializeTrusted
                                     view.applyAnnotations(currentAnnotations) {
+                                        ReaderPerformance.mark("annotations")
                                         if (!active()) return@applyAnnotations
                                         fun commit() {
                                             view.postVisualStateCallback(generation, object : WebView.VisualStateCallback() {
                                                 override fun onComplete(requestId: Long) {
                                                     if (!active()) return
+                                                    ReaderPerformance.mark("restore")
+                                                    ReaderPerformance.mark("ready")
                                                     view.restoring = false
                                                     view.pendingReflowAnchor = null; view.pendingRestoreFraction = null
                                                     view.report()
                                                     // The visible viewport is committed before any full-book work starts.
                                                     view.alpha = 1f
                                                     currentReady(view.pageInfo().second)
+                                                    if(session.flashAnchor && session.anchor!=null && !reflowing) view.trusted("window.ReadX.flash(${session.anchor.json()})") {view.alpha=.15f;view.animate().alpha(1f).setDuration(160).start()}
                                                 }
                                             })
                                         }

@@ -28,7 +28,7 @@ class ColorMigrationInstrumentedTest {
                 for(i in 1..2) old.execSQL("INSERT INTO annotations VALUES (?,?,?,?,?,?,?,?,?,?)",arrayOf<Any>("old-$i","old-book","HIGHLIGHT",0,.5,"原章节","原书文字","旧笔记$i",locator,i))
                 old.version=3
             }
-            val db=Room.databaseBuilder(app,LibraryDatabase::class.java,name).addMigrations(MIGRATION_1_2,MIGRATION_2_3,MIGRATION_3_4,MIGRATION_4_5).build()
+            val db=Room.databaseBuilder(app,LibraryDatabase::class.java,name).addMigrations(MIGRATION_1_2,MIGRATION_2_3,MIGRATION_3_4,MIGRATION_4_5, MIGRATION_5_6).build()
             try {
                 val dao=db.library();val rows=dao.annotations("old-book")
                 assertEquals(2,rows.size);assertEquals(setOf("旧笔记1","旧笔记2"),rows.map {it.note}.toSet());assertTrue(rows.all {it.color=="#FFD240" && it.anchorKey.isNotBlank()});assertEquals(rows[0].anchorKey,rows[1].anchorKey)

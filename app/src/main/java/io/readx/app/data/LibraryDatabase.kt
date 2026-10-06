@@ -20,6 +20,9 @@ data class Book(
     val tags: String = "",
     val coverPath: String? = null,
     @ColumnInfo(defaultValue = "0") val totalUnits: Int = 0,
+    val textEngine: String? = null,
+    val readingAnchor: String? = null,
+    @ColumnInfo(defaultValue = "''") val pdfCropConfig: String = "",
 )
 
 @Entity(tableName = "chapters", primaryKeys = ["bookId", "ordinal"],
@@ -41,6 +44,7 @@ data class Bookmark(
     val fraction: Float,
     val label: String,
     val createdAt: Long = System.currentTimeMillis(),
+    val textAnchor: String? = null,
 )
 
 /** Sidecar annotations never modify the user's original document. Offsets are UTF-16 in the canonical DOM text. */
@@ -103,7 +107,7 @@ interface LibraryDao {
     @Insert suspend fun insertBookmark(bookmark: Bookmark)
     @Transaction suspend fun insertPositionBookmark(mark: Bookmark) {
         insertBookmark(mark)
-        insertAnnotation(Annotation(mark.id,mark.bookId,"BOOKMARK",mark.chapter,mark.fraction,mark.label,createdAt=mark.createdAt))
+        insertAnnotation(Annotation(mark.id,mark.bookId,"BOOKMARK",mark.chapter,mark.fraction,mark.label,locator=mark.textAnchor.orEmpty(),createdAt=mark.createdAt))
     }
     @Transaction suspend fun removePositionBookmark(id: String) { deleteAnnotation(id);deleteBookmark(id) }
     @Query("DELETE FROM bookmarks WHERE id=:id") suspend fun deleteBookmark(id: String)
@@ -111,12 +115,19 @@ interface LibraryDao {
     @Insert suspend fun insertChapters(chapters: List<Chapter>)
     @Query("UPDATE books SET chapterIndex=:chapter, scrollFraction=:fraction, lastReadAt=:time WHERE id=:id")
     suspend fun savePosition(id: String, chapter: Int, fraction: Float, time: Long)
+    @Query("UPDATE books SET textEngine=:engine WHERE id=:id") suspend fun saveTextEngine(id: String, engine: String)
+    @Query("UPDATE books SET readingAnchor=:anchor WHERE id=:id") suspend fun saveReadingAnchor(id: String, anchor: String?)
+    @Query("UPDATE books SET pdfCropConfig=:config WHERE id=:id") suspend fun savePdfCrop(id: String, config: String)
+    @Transaction suspend fun saveTextPosition(id: String, chapter: Int, fraction: Float, time: Long, anchor: String?) {
+        savePosition(id,chapter,fraction,time);saveReadingAnchor(id,anchor)
+    }
     @Query("UPDATE books SET title=:title, author=:author, tags=:tags WHERE id=:id")
     suspend fun edit(id: String, title: String, author: String, tags: String)
+    @Query("UPDATE books SET coverPath=:path WHERE id=:id") suspend fun saveCover(id:String,path:String?)
     @Query("DELETE FROM books WHERE id=:id") suspend fun delete(id: String)
 }
 
-@Database(entities = [Book::class, Chapter::class, Bookmark::class, Annotation::class, PdfConversion::class], version = 5, exportSchema = true)
+@Database(entities = [Book::class, Chapter::class, Bookmark::class, Annotation::class, PdfConversion::class], version = 6, exportSchema = true)
 abstract class LibraryDatabase : RoomDatabase() { abstract fun library(): LibraryDao; abstract fun conversions(): PdfConversionDao }
 
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -168,5 +179,15 @@ val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
         db.execSQL("CREATE INDEX IF NOT EXISTS index_pdf_conversions_sourceBookId ON pdf_conversions(sourceBookId)")
         db.execSQL("CREATE INDEX IF NOT EXISTS index_pdf_conversions_resultBookId ON pdf_conversions(resultBookId)")
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_pdf_conversions_sourceFingerprint_configFingerprint ON pdf_conversions(sourceFingerprint,configFingerprint)")
+    }
+}
+
+/** v5→v6 is additive. Original chapter/fraction, all duplicates, notes and conversion FKs stay intact. */
+val MIGRATION_5_6 = object : androidx.room.migration.Migration(5,6) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE books ADD COLUMN textEngine TEXT")
+        db.execSQL("ALTER TABLE books ADD COLUMN readingAnchor TEXT")
+        db.execSQL("ALTER TABLE books ADD COLUMN pdfCropConfig TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE bookmarks ADD COLUMN textAnchor TEXT")
     }
 }

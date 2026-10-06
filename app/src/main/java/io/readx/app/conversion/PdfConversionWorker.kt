@@ -33,6 +33,7 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
     private val app = context.applicationContext as ReadXApplication
     private val conversions get() = app.conversions
     private val conversionId get() = inputData.getString("conversionId") ?: error("任务参数缺失")
+    private var processingStage="QUEUED"
     private var completed=0;private var total=0;private var imagePages=0
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val initial=conversions.dao.get(conversionId) ?: return@withContext Result.failure()
@@ -52,9 +53,15 @@ class PdfConversionWorker(context: Context, parameters: WorkerParameters): Corou
         catch(_: InvalidPasswordException) {progress("FAILED","密码 PDF 首版不转换，请使用原版阅读");Result.failure()}
         catch(_: NoReadableBody) {progress("FAILED","未获得可重排正文，请检查 OCR 模型或使用原 PDF；未生成图片冒充的转换版");Result.failure()}
         catch(_: OutOfMemoryError) {progress("FAILED","转换内存不足，请使用原版阅读");Result.failure()}
-        catch(_: Exception) {progress("FAILED","转换失败：文件损坏、不支持或资源超过限额；可重试或阅读原版");Result.failure()}
+        catch(e: Exception) {
+            val where=if(processingStage in listOf("EXTRACTING","OCR")) "原文第 ${(completed+1).coerceAtMost(total.coerceAtLeast(1))} 页" else when(processingStage) {"PACKAGING"->"EPUB 打包";"IMPORTING"->"书库导入";else->"文档准备"}
+            val reason=when(e) {is java.io.IOException->"文件读取/写入失败，可能损坏或存储空间不足";is IllegalArgumentException->"页面数据无效或资源超出限额";is IllegalStateException->"页面处理或本地识别引擎失败";else->"当前格式处理失败"}
+            progress("FAILED","$where：$reason。已完成页检查点保留，继续时只处理缺失或损坏页。")
+            Result.failure()
+        }
     }
     private suspend fun progress(stage: String, error: String = "") {
+        if(stage!="FAILED")processingStage=stage
         if(conversions.dao.progressForRun(conversionId,id.toString(),stage,completed,total,imagePages,error)==0) throw CancellationException()
         if(stage in listOf("EXTRACTING","OCR","PACKAGING","IMPORTING")) setForeground(foreground(stage))
     }

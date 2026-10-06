@@ -49,6 +49,7 @@ internal class PaginationCoordinator(
                 persist() // Save every completed chapter: leaving/reformatting cannot lose an entire batch.
                 yield()
             }
+            ReaderPerformance.mark("statistics")
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { publish(error.message ?: "全书分页统计失败，可重试") }
     }

@@ -73,10 +73,10 @@ fun FallbackPdfScreen(book: Book, repository: LibraryRepository, pageChanged: (I
         catch (e: Exception) { error = e.message ?: "页面渲染失败" }
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Box(Modifier.weight(1f).fillMaxWidth().transformable(transform), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.weight(1f).fillMaxWidth().transformable(transform), contentAlignment = Alignment.Center) {
             if (error != null) Text(error!!, Modifier.padding(24.dp))
             else if (bitmap == null) CircularProgressIndicator(Modifier.align(Alignment.Center))
-            else Image(bitmap!!.asImageBitmap(), "PDF 第 " + (page + 1) + " 页", Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = dx; translationY = dy }, alignment = Alignment.TopCenter)
+            else Image(bitmap!!.asImageBitmap(), "PDF 第 " + (page + 1) + " 页", Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = dx; translationY = dy }, alignment = Alignment.Center)
         }
         Text("基础模式：支持翻页和缩放；选字、搜索及密码文档需较新的系统。", Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {

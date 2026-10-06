@@ -1,15 +1,18 @@
 (() => {
   'use strict';
   if (window.ReadX && typeof window.ReadX.selection === 'function') return true;
+  let nodeCache=null, textCache=null, nodeOffsets=new WeakMap();
+  const invalidate = () => { nodeCache=null; textCache=null; nodeOffsets=new WeakMap(); };
   const nodes = () => {
+    if(nodeCache) return nodeCache;
     const out = []; let at = 0;
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(n) { return n.parentElement && !n.parentElement.closest('script,style,noscript') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }
     });
-    for (let n; (n = walker.nextNode());) { out.push({node:n, start:at, end:at+n.length}); at += n.length; }
-    return out;
+    for (let n; (n = walker.nextNode());) { nodeOffsets.set(n,at); out.push({node:n, start:at, end:at+n.length}); at += n.length; }
+    nodeCache=out; return out;
   };
-  const text = list => list.map(n => n.node.data).join('');
+  const text = list => textCache ?? (textCache=list.map(n => n.node.data).join(''));
   function locate(anchor, list) {
     const all = text(list); let start = anchor.start, end = anchor.end;
     if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= all.length && all.slice(start,end) === anchor.quote &&
@@ -41,6 +44,54 @@
     if(q<all.length && /[\uD800-\uDBFF]/.test(all[q-1])) q--;
     return {start,end,quote:all.slice(start,end),prefix:all.slice(p,start),suffix:all.slice(end,q)};
   }
+  function preserveSelection(paged,direction) {
+    const a=selection(); if(!a) return false;
+    const pageWidth=innerWidth, next=Math.max(0,Math.min(document.documentElement.scrollWidth-innerWidth,scrollX+direction*pageWidth));
+    window.scrollTo(next,scrollY);
+    const list=nodes(),position=locate(a,list),range=position && rangeFor(position,list);
+    if(range) {const s=getSelection();s.removeAllRanges();s.addRange(range);return true;} return false;
+  }
+  function extendSelection(direction) {
+    const s=getSelection();if(!s || !s.rangeCount || s.isCollapsed) return null;
+    if(typeof s.modify==='function') s.modify('extend',direction>0?'forward':'backward','line');
+    return selectionInfo();
+  }
+  function flash(a) {
+    const list=nodes(),position=locate(a,list);if(!position)return false;
+    const range=rangeFor(position,list);if(!range)return false;
+    const layers=[];
+    for(const box of range.getClientRects()) {
+      if(box.right<=0||box.left>=innerWidth||box.bottom<=0||box.top>=innerHeight)continue;
+      const layer=document.createElement('div');layer.setAttribute('aria-hidden','true');
+      layer.style.cssText=`position:fixed;pointer-events:none;z-index:2147483646;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px;`;
+      layer.style.setProperty('background-color','rgba(36,107,252,.28)','important');document.body.appendChild(layer);layers.push(layer);
+    }
+    let count=0;const timer=setInterval(()=>{for(const layer of layers)layer.style.opacity=(count%2)?'1':'0';if(++count>=6){clearInterval(timer);layers.forEach(layer=>layer.remove());}},180);
+    return true;
+  }
+  function snapSelection(unit) {
+    const a=selection();if(!a)return null;
+    const list=nodes(),all=text(list);let start=a.start,end=a.end;
+    if(typeof Intl.Segmenter==='function') {
+      const segmenter=new Intl.Segmenter('zh',{granularity:unit==='SENTENCE'?'sentence':'word'});
+      const lo=Math.max(0,start-256),hi=Math.min(all.length,end+256);
+      for(const segment of segmenter.segment(all.slice(lo,hi))) {
+        const i=lo+segment.index,j=i+segment.segment.length;
+        if(i<start && j>start)start=i;
+        if(i<end && j>end)end=j;
+      }
+    } else {
+      const word=c=>/[\p{L}\p{N}]/u.test(c);
+      if(unit==='WORD') {while(start>0 && start>a.start-32 && word(all[start-1]))start--;while(end<all.length && end<a.end+32 && word(all[end]))end++;}
+    }
+    while(start<end && /\s/.test(all[start]))start++;
+    while(end>start && /\s/.test(all[end-1]))end--;
+    if(start>0 && /[\uDC00-\uDFFF]/.test(all[start]))start--;
+    if(end<all.length && /[\uD800-\uDBFF]/.test(all[end-1]))end++;
+    if(end-start>16384)return selectionInfo();
+    const range=rangeFor({start,end},list);if(range) {const s=getSelection();s.removeAllRanges();s.addRange(range);}
+    return selectionInfo();
+  }
   function selection() {
     const s = window.getSelection(); if (!s || s.isCollapsed || !s.rangeCount) return null;
     const r = s.getRangeAt(0); if (!document.body.contains(r.startContainer) || !document.body.contains(r.endContainer)) return null;
@@ -52,6 +103,15 @@
   }
   function viewportAnchor() {
     const list = nodes();
+    // Chromium caret hit-testing starts at the viewport, not at the beginning of a giant chapter.
+    for(const y of [24,48,80]) for(const x of [Math.min(innerWidth-24,Math.max(24,parseFloat(getComputedStyle(document.body).paddingLeft)+4)),innerWidth/2]) {
+      const caret=document.caretRangeFromPoint(x,y);
+      if(!caret || caret.startContainer.nodeType!==Node.TEXT_NODE) continue;
+      const start=nodeOffsets.get(caret.startContainer);
+      if(start===undefined || !caret.startContainer.data.trim()) continue;
+      const at=caret.startOffset, end=Math.min(at+32,caret.startContainer.length);
+      if(end>at) return anchor(start+at,start+end,list);
+    }
     for (const n of list) {
       if (!n.node.data.trim()) continue;
       const r = document.createRange(); r.selectNodeContents(n.node);
@@ -91,7 +151,7 @@
   }
   function marks(items) {
     document.querySelectorAll('[data-readx-mark]').forEach(e => e.replaceWith(...e.childNodes));
-    document.body.normalize();const initial=nodes(), all=text(initial);
+    document.body.normalize();invalidate();const initial=nodes(), all=text(initial);
     const resolveFast=a=> {
       if(a.start>=0 && a.end<=all.length && all.slice(a.start,a.end)===a.quote &&
         (!a.prefix || all.slice(Math.max(0,a.start-a.prefix.length),a.start)===a.prefix) &&
@@ -137,6 +197,20 @@
         part.replaceWith(mark);mark.appendChild(part);
       }
     }
+    invalidate();return {resolved:resolvedMarks.length,total:items.length};
+  }
+  // Recolour/edit metadata in-place. No text-node replacement, normalize(), or pagination invalidation.
+  function restyle(items) {
+    const values=new Map(items.map(a=>[a.id,a]));
+    resolvedMarks=resolvedMarks.map(m=>({a:values.get(m.a.id)||m.a,p:m.p}));
+    document.querySelectorAll('[data-readx-mark]').forEach(mark=>{
+      const ids=JSON.parse(mark.dataset.readxIds||'[]'), rows=ids.map(id=>values.get(id)).filter(Boolean);
+      const newest=kind=>rows.filter(a=>a.kind===kind).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
+      const highlight=newest('HIGHLIGHT'), underline=newest('UNDERLINE'), note=newest('NOTE');
+      const safe=a=>/^#[0-9a-f]{6}$/i.test(a.color||'') ? a.color : '#FFD240';
+      if(highlight) {const v=parseInt(safe(highlight).slice(1),16);mark.style.setProperty('background-color',`rgba(${v>>16},${(v>>8)&255},${v&255},0.32)`,'important');}
+      if(underline||note) {const a=underline||note;mark.style.setProperty('text-decoration-color',safe(a),'important');mark.style.setProperty('text-decoration-style',underline?'solid':'dotted','important');}
+    });
     return {resolved:resolvedMarks.length,total:items.length};
   }
   function navigate(a,paged) {
@@ -163,7 +237,7 @@
     }
     return 0;
   }
-  window.ReadX = Object.freeze({sourcePage,selection,selectionInfo,markAt,viewportAnchor,marks,navigate,
+  window.ReadX = Object.freeze({flash,snapSelection,preserveSelection,extendSelection,sourcePage,selection,selectionInfo,markAt,viewportAnchor,marks,restyle,navigate,
     interactiveAt(x,y) { const e=document.elementFromPoint(x,y); return !!(e && e.closest('a,[data-readx-mark]')); },
     clearSelection() { const s=window.getSelection(); if(s) s.removeAllRanges(); },
     metrics() { return {width:innerWidth,height:innerHeight,pages:Math.max(1,Math.ceil((document.documentElement.scrollWidth-innerWidth)/innerWidth-.01)+1)}; }

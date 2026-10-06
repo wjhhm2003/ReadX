@@ -83,7 +83,7 @@ class OcrModelManager(private val context: Context) {
         require(name in SUPPORTED && hash.matches(Regex("[a-f0-9]{64}")))
         return File(root, "$name/$hash/tessdata/$name.traineddata")
     }
-    suspend fun import(uri: Uri) = withContext(Dispatchers.IO) { lock.withLock {
+    suspend fun import(uri: Uri, activate:()->Boolean = {true}) = withContext(Dispatchers.IO) { lock.withLock {
         val displayName = if(uri.scheme == "content") context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if(c.moveToFirst()) c.getString(0) else null } else uri.lastPathSegment
         val name = displayName.orEmpty().removeSuffix(".traineddata")
         require(name in SUPPORTED && displayName == "$name.traineddata") { "请选择 chi_sim、eng 或 chi_tra.traineddata 模型" }
@@ -105,8 +105,11 @@ class OcrModelManager(private val context: Context) {
             catch(e: Exception) { if(models.value[name]!=hash) destination.delete();throw e }
             finally { api.recycle() }
             ensureActive()
-            preferences.edit().putString(name,hash).commit()
-            mutableModels.value=read()
+            synchronized(OcrDownloadPolicy.activationLock) {
+                if(!activate()) {if(models.value[name]!=hash)destination.delete();throw CancellationException("模型激活已取消")}
+                check(preferences.edit().putString(name,hash).commit()) {"模型设置保存失败"}
+                mutableModels.value=read()
+            }
         } finally { temporary.delete() }
     } }
     internal suspend fun pruneUnusedVersions() = withContext(Dispatchers.IO) { lock.withLock {

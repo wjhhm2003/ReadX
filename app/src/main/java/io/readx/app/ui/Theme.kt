@@ -61,13 +61,18 @@ internal fun readingScheme(palette: ColorScheme, theme: ReadingTheme, dark: Bool
 @Composable
 fun ReadXTheme(settings: ReaderSettings, reading: Boolean=false, content: @Composable ()->Unit) {
     val systemDark=isSystemInDarkTheme()
-    val dark=if(reading) settings.theme==ReadingTheme.NIGHT || settings.theme==ReadingTheme.BLACK || (settings.theme==ReadingTheme.SYSTEM && systemDark) else systemDark
+    val appDark=when(settings.appTheme) {
+        ReadingTheme.DAY->false
+        ReadingTheme.NIGHT, ReadingTheme.BLACK->true
+        else->systemDark
+    }
+    val dark=if(reading) settings.theme==ReadingTheme.NIGHT || settings.theme==ReadingTheme.BLACK || (settings.theme==ReadingTheme.SYSTEM && systemDark) else appDark
     val context=LocalContext.current
     // Dynamic color owns the whole scheme. Reader paper/ink are an intentional, separate override.
     val palette=remember(settings.dynamicColors,settings.accent,settings.customAccent,dark,context) { if(settings.dynamicColors && Build.VERSION.SDK_INT>=31) {
         if(dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else accentScheme(settings.accent,settings.customAccent,dark) }
-    val colors=if(reading) readingScheme(palette,settings.theme,dark) else palette
+    val colors=if(reading) readingScheme(palette,settings.theme,dark) else if(!reading && settings.appTheme==ReadingTheme.BLACK && dark) palette.copy(background=Color.Black,surface=Color.Black,surfaceContainerLowest=Color.Black) else palette
     SideEffect {
         val activity=generateSequence(context) {(it as? ContextWrapper)?.baseContext}.filterIsInstance<Activity>().firstOrNull()
         activity?.window?.let {window->

@@ -64,3 +64,18 @@ PdfBox 的可选 `com.gemalto.jp2.JP2Decoder` 没有打包，仅为该可选类�
 Gradle Wrapper 9.3.1、AGP 9.1.0、Compose compiler 2.2.10、KSP 2.3.12 为开发工具；各自使用上游许可。JUnit 4.13.2 使用 EPL-1.0（测试依赖），AndroidX Test 使用 Apache-2.0；不是预览 APK 的独立功能。
 
 直接版本以 [`app/build.gradle.kts`](../app/build.gradle.kts)、根构建文件及 Wrapper 为准。未把全部传递依赖重新授权为 MIT。新增/升级依赖时需同步实际解析版本及许可/NOTICE；当前声明依据本轮源码、缓存 POM 及固定上游文件核对。
+
+
+## 0.6.0 机制研究（未复制或打包）
+
+- 研究 KOReader `frontend/document/pdfdocument.lua` 的 used bounding box、原页尺寸和页级缓存接口，以及按页选择边界的思路。仅用于确认“阅读裁边不等于改原文件/智能重排”的职责边界；ReadX 的预览像素背景估计、投影检测、规则优先级和 Kotlin 可逆变换是独立实现。
+- KOReader 工程采用 AGPL-3.0 范围的许可证；本轮**不复制其 Lua/C++ 实现、不链接其运行时、不引入 KOReader/k2pdfopt 依赖，也不将其代码重新许可为 MIT**。ReadX 原创实现继续 MIT；若将来要实际复用上游代码，须重新确认许可并取得用户架构/分发授权。
+- Android StaticLayout、PdfRenderer 和已固定的 AndroidX PDF 公开接口来自 Android/AndroidX；本轮没有升级依赖。API 签名以工程缓存的 beta01 AAR 与编译结果核对。裁边、文字层搜索、选择和链接使用公开 PdfDocument，不访问内部布局。
+- 自生成 `androidTest/assets/crop-fixtures.pdf` 仅用于测试：单栏、双栏、扫描图片、空白、横版、脚注/页码/链接、暗背景，不含私人书籍。生成使用开发机 ReportLab，APK 不包含 Python/ReportLab/Lua/C++ 新运行时。
+
+
+## 0.7.0 本地字体与可选在线模型
+
+- 未新增大型依赖/云OCR/LLM。字体使用Android Typeface与用户自行导入的TTF/OTF，未将用户字体作为MIT资源分发；Markdown/TXT批注导出不打包字体。
+- 在线下载沿用固定官方 tessdata_fast 4.1.0 清单/提交/SHA-256与Apache-2.0模型许可；仅将清单复制到普通assets，模型二进制仍不进Git。用户明确开启并点击下载后才访问raw.githubusercontent.com，关闭中断未完成任务，本地导入与内置版继续保留。
+- 选区气泡、裁边手柄与磁吸为ReadX原创Compose/Kotlin实现；不复制KOReader或引入Lua/C++运行时。Unicode边界使用平台BreakIterator与Chromium Intl.Segmenter，有启发式限制，不宣传通用中文语义模型。

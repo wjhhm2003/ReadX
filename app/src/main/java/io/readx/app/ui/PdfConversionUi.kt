@@ -27,6 +27,7 @@ internal fun PdfConversionSettings(vm: LibraryViewModel) {
     val models by vm.models.collectAsStateWithLifecycle()
     val bundledState by vm.bundledModelState.collectAsStateWithLifecycle()
     val busy by vm.modelBusy.collectAsStateWithLifecycle()
+    val downloads by vm.downloads.collectAsStateWithLifecycle()
     val tasks by vm.conversionTasks.collectAsStateWithLifecycle()
     val context=LocalContext.current
     val licenses by vm.licenses.collectAsStateWithLifecycle()
@@ -49,6 +50,17 @@ internal fun PdfConversionSettings(vm: LibraryViewModel) {
         if (BuildConfig.BUNDLED_OCR) Text(bundledState, style=MaterialTheme.typography.bodySmall)
         if(bundledState.contains("失败")) TextButton(onClick={vm.retryBundledModels()}, enabled=!busy) {Text("重新部署内置模型")}
         OutlinedButton(onClick={import.launch(arrayOf("*/*"))},enabled=!busy,modifier=Modifier.testTag("import-ocr-model")) {Text(if(busy) "校验模型中…" else (if (BuildConfig.BUNDLED_OCR) "替换 / 导入 OCR 模型" else "导入 OCR 模型"))}
+        Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {Text("允许在线模型下载",Modifier.weight(1f));Switch(settings.onlineModels,vm::onlineModels,Modifier.testTag("online-model-switch"))}
+        Text("默认关闭。仅主动下载固定版本的官方模型，校验大小和 SHA-256；不上传书籍/笔记。关闭取消未完成下载，不删除已有模型。",style=MaterialTheme.typography.bodySmall)
+        val download=downloads.lastOrNull()
+        val active=downloads.any {!it.state.isFinished}
+        if(settings.onlineModels) OutlinedButton(onClick=vm::downloadModels,enabled=!active) {Text(if(active) "下载/后台等待…" else "下载所选语言模型（固定版本）")}
+        if(download!=null) {
+            val bytes=download.progress.getLong("bytes",0);val total=download.progress.getLong("total",0)
+            if(active && total>0) {LinearProgressIndicator(progress={bytes.toFloat()/total},modifier=Modifier.fillMaxWidth());Text("$bytes / $total 字节",style=MaterialTheme.typography.labelSmall)}
+            download.outputData.getString("error")?.let {Text(it,color=MaterialTheme.colorScheme.error)}
+            if(download.state==androidx.work.WorkInfo.State.SUCCEEDED) Text("所选模型已校验并启用",style=MaterialTheme.typography.bodySmall)
+        }
         Text("仅接受 chi_sim、chi_tra、eng.traineddata；单文件最多 64 MiB。" + (if (BuildConfig.BUNDLED_OCR) "本 APK 已内置三个模型，无需手动导入。" else "模型不随 APK 提供。"),style=MaterialTheme.typography.bodySmall)
         TextButton(onClick={vm.showLicenses()}) {Text("开源组件与许可证")}
         if(tasks.isNotEmpty()) Text("转换任务",style=MaterialTheme.typography.titleSmall)
@@ -80,7 +92,8 @@ internal fun PdfConversionDialog(vm: LibraryViewModel) {
         if(row.imagePages>0) Text("${row.imagePages} 页保留原图，不承诺复杂版式完全重排。",style=MaterialTheme.typography.bodySmall)
         if(row.error.isNotBlank()) Text(row.error)
         if(row.stage=="WAITING_MODEL") OutlinedButton(onClick={import.launch(arrayOf("*/*"))}) {Text("导入 OCR 模型")}
-        if(row.stage in listOf("WAITING_MODEL","FAILED","CANCELLED")) TextButton(onClick={vm.resumeConversion(row.id)}) {Text("继续 / 重试")}
+        if(row.stage in listOf("WAITING_MODEL","FAILED","CANCELLED")) TextButton(onClick={vm.resumeConversion(row.id)}) {Text(if(row.stage=="FAILED") "重试失败页" else "从检查点继续")}
+        if(row.stage in listOf("FAILED","CANCELLED","WAITING_MODEL")) Text("已完成页不会整书重扫；改变识别模型后需要重新识别受影响页。",style=MaterialTheme.typography.bodySmall)
         if(row.active) TextButton(onClick={vm.cancelConversion(row.id)}) {Text("取消转换")}
         Text("退出弹层不取消后台任务。原书的进度与批注不会迁移或删除。",style=MaterialTheme.typography.bodySmall)
     }},confirmButton={TextButton(onClick=vm::dismissConversion) {Text("后台继续 / 关闭")}},dismissButton={TextButton(onClick={

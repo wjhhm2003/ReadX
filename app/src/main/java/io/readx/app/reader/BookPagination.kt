@@ -46,16 +46,17 @@ data class BookPageIndex(val counts: List<Int?>) {
 fun BookPageCounter(book: Book, chapters: List<Chapter>, settings: ReaderSettings, repository: LibraryRepository,
     viewport: Pair<Int, Int>, modifier: Modifier, retry: Int, currentChapter: Int, foregroundPages: Int,
     onIndex: (BookPageIndex?, String?) -> Unit) {
+    val interaction by WebReadingPriority.epoch.collectAsState()
     val context = LocalContext.current
     val density = LocalDensity.current.density
     val fontScale = LocalDensity.current.fontScale
     val webVersion = remember { WebView.getCurrentWebViewPackage()?.let { "${it.packageName}:${it.versionName}" }.orEmpty() }
     val locales = LocalConfiguration.current.locales.toLanguageTags()
     val config = remember(book.fingerprint, chapters, viewport, density, fontScale, settings.fontSize,
-        settings.lineHeight, settings.margin, settings.serif, webVersion, locales) {
+        settings.lineHeight, settings.margin, settings.serif, settings.fontId, webVersion, locales) {
         LayoutConfig(book.fingerprint, chapters.map { it.href }, viewport.first, viewport.second, density,
             fontScale, settings.fontSize, settings.lineHeight, settings.margin, settings.serif,
-            webVersion, Build.FINGERPRINT, locales)
+            webVersion, Build.FINGERPRINT, locales,fontId=settings.fontId)
     }
     val layoutKey = remember(config) { config.generateKey() }
     val cache = remember { PageIndexCache(context.applicationContext.cacheDir) }
@@ -79,11 +80,12 @@ fun BookPageCounter(book: Book, chapters: List<Chapter>, settings: ReaderSetting
             }
         }, onRelease = { it.release(); if (counter === it) counter = null })
     }
-    LaunchedEffect(coordinator, currentChapter, foregroundPages, retry) { withContext(Dispatchers.Main.immediate) {
+    LaunchedEffect(coordinator, currentChapter, foregroundPages, retry, interaction) { withContext(Dispatchers.Main.immediate) {
         var usedView: LocalWebReader? = null
         var generation = -1L
         try {
             coordinator.calculate(currentChapter, foregroundPages) { ordinal ->
+                WebReadingPriority.awaitIdle()
                 // Cache hits never create a second WebView. Allow the foreground to draw before missing work.
                 if (!needsCounter) { withFrameNanos { }; needsCounter = true }
                 val view = snapshotFlow { counter?.takeIf { it.width == viewport.first && it.height == viewport.second } }.filterNotNull().first()
@@ -98,6 +100,7 @@ fun BookPageCounter(book: Book, chapters: List<Chapter>, settings: ReaderSetting
                     override fun shouldOverrideUrlLoading(webView: WebView, request: WebResourceRequest) = true
                     override fun shouldInterceptRequest(webView: WebView, request: WebResourceRequest): WebResourceResponse {
                         val uri = request.url
+                        if(uri.scheme=="https" && uri.host=="appassets.androidplatform.net") LocalFontStore.response(view.context,uri.path.orEmpty())?.let {return it}
                         if (uri.scheme != "https" || uri.host != "appassets.androidplatform.net" || !uri.path.orEmpty().startsWith("/content/")) return denied()
                         return try {
                             val file = BookParser.safeFile(content, uri.path!!.removePrefix("/content/"))

@@ -29,7 +29,7 @@ class ConversionMigrationInstrumentedTest {
                 for(i in 1..2) old.execSQL("INSERT INTO annotations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",arrayOf<Any>("note$i","old","NOTE",4,.3,"旧位置","原引用","笔记$i","{}",i,"#FFD240","same",i))
                 old.version=4
             }
-            val db=Room.databaseBuilder(app,LibraryDatabase::class.java,name).addMigrations(MIGRATION_4_5).build()
+            val db=Room.databaseBuilder(app,LibraryDatabase::class.java,name).addMigrations(MIGRATION_4_5, MIGRATION_5_6).build()
             try {
                 val dao=db.library();assertEquals("标签",dao.book("old")!!.tags);assertEquals(4,dao.book("old")!!.chapterIndex);assertEquals(2,dao.annotations("old").size);assertEquals(1,dao.chapterCount("old"))
                 dao.insertBook(Book("child","other","转换版",format="EPUB",sourceName="result.epub"))

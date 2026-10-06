@@ -28,8 +28,8 @@ class LibraryRepository(private val context: Context, private val db: LibraryDat
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val dao = db.library()
     internal fun closePdfResource(close: suspend () -> Unit) = applicationScope.launch { close() }
-    fun persistPosition(id: String, chapter: Int, fraction: Float) = applicationScope.launch {
-        dao.savePosition(id, chapter, fraction.coerceIn(0f, 1f), System.currentTimeMillis())
+    fun persistPosition(id: String, chapter: Int, fraction: Float, anchor: String? = null) = applicationScope.launch {
+        dao.saveTextPosition(id, chapter, fraction.coerceIn(0f, 1f), System.currentTimeMillis(),anchor)
     }
     val books = dao.observeBooks()
     private val importLock = Mutex()
@@ -119,7 +119,7 @@ class LibraryRepository(private val context: Context, private val db: LibraryDat
 
     suspend fun cover(book: Book): Bitmap? = withContext(Dispatchers.IO) {
         try {
-            val coverFile = if (book.format == "PDF") {
+            val coverFile = if(book.coverPath?.matches(Regex("custom-cover-[0-9a-f-]{36}\\.jpg"))==true) File(directory(book.id),book.coverPath) else if (book.format == "PDF") {
                 val thumbnail = File(directory(book.id), "thumbnail.jpg")
                 if (!thumbnail.exists()) {
                     ParcelFileDescriptor.open(source(book), ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
@@ -152,8 +152,43 @@ class LibraryRepository(private val context: Context, private val db: LibraryDat
         catch (_: Exception) { null }
     }
 
+    suspend fun fileSizes(books:List<Book>):Map<String,Long> = withContext(Dispatchers.IO) {books.associate {ensureActive();it.id to source(it).length()}}
+    suspend fun annotationText(id:String,markdown:Boolean):String=withContext(Dispatchers.IO) {
+        val book=dao.book(id) ?: error("书籍已移除")
+        val out=StringBuilder(AnnotationExport.heading(book.title,markdown))
+        for(mark in dao.annotations(id).sortedWith(compareBy<Annotation> {it.chapter}.thenBy {it.createdAt}.thenBy {it.id})) {
+            ensureActive();out.append(AnnotationExport.entry(mark,book.format,markdown))
+            require(out.length<=100_000) {"批注过多，请使用文件导出；不复制被截断的内容"}
+        };out.toString()
+    }
+    suspend fun exportAnnotations(id:String,uri:Uri,markdown:Boolean)=withContext(Dispatchers.IO) {
+        val book=dao.book(id) ?: error("书籍已移除")
+        context.contentResolver.openOutputStream(uri,"wt")?.bufferedWriter(Charsets.UTF_8)?.use {out->
+            out.write(AnnotationExport.heading(book.title,markdown))
+            for(mark in dao.annotations(id).sortedWith(compareBy<Annotation> {it.chapter}.thenBy {it.createdAt}.thenBy {it.id})) {ensureActive();out.write(AnnotationExport.entry(mark,book.format,markdown))}
+        } ?: error("无法保存批注文件")
+    }
+    suspend fun changeCover(id:String,uri:Uri)=withContext(Dispatchers.IO) {importLock.withLock {
+        val book=dao.book(id) ?: error("书籍已移除")
+        val targetDirectory=directory(id);val inputFile=File.createTempFile("cover-",".tmp",targetDirectory)
+        var outputFile:File?=null
+        try {
+            var bytes=0L
+            context.contentResolver.openInputStream(uri)?.use {input->inputFile.outputStream().use {out->
+                val buffer=ByteArray(32768);while(true) {ensureActive();val n=input.read(buffer);if(n<0)break;bytes+=n;require(bytes<=16*1024*1024) {"封面文件最多 16 MiB"};out.write(buffer,0,n)}
+            }} ?: error("无法读取封面")
+            val bounds=BitmapFactory.Options().apply {inJustDecodeBounds=true};BitmapFactory.decodeFile(inputFile.path,bounds)
+            require(bounds.outWidth>0 && bounds.outHeight>0) {"不是可读取的图片"}
+            val options=BitmapFactory.Options();while(bounds.outWidth/options.inSampleSize.coerceAtLeast(1)>1024 || bounds.outHeight/options.inSampleSize.coerceAtLeast(1)>1024)options.inSampleSize=options.inSampleSize.coerceAtLeast(1)*2
+            val bitmap=BitmapFactory.decodeFile(inputFile.path,options) ?: error("封面解码失败")
+            val target=File(targetDirectory,"custom-cover-${UUID.randomUUID()}.jpg");outputFile=target
+            try {target.outputStream().use {check(bitmap.compress(Bitmap.CompressFormat.JPEG,90,it)) {"封面保存失败"}}}finally {bitmap.recycle()}
+            ensureActive();dao.saveCover(id,target.name);outputFile=null
+            book.coverPath?.takeIf {it.matches(Regex("custom-cover-[0-9a-f-]{36}\\.jpg"))}?.let {File(targetDirectory,it).delete()}
+        } finally {inputFile.delete();outputFile?.delete()}
+    }}
     suspend fun delete(book: Book) = withContext(Dispatchers.IO) {
         if(book.format=="PDF") (context.applicationContext as io.readx.app.ReadXApplication).conversions.stopSource(book.id)
-        importLock.withLock { dao.delete(book.id); directory(book.id).deleteRecursively() }
+        importLock.withLock { dao.delete(book.id); directory(book.id).deleteRecursively(); File(context.cacheDir,"native-text-v1/${book.id}").deleteRecursively() }
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -46,6 +47,8 @@ import io.readx.app.data.Annotation
 import io.readx.app.data.MarkColor
 import io.readx.app.reader.*
 
+private data class ReaderNoteDraft(val anchor:TextAnchor,val note:String,val existing:Annotation?=null)
+
 private enum class ReaderPanel(val label: String) { CONTENTS("目录"), ANNOTATIONS("批注"), PROGRESS("进度"), PAPER("背景"), TYPE("排版") }
 
 @Composable
@@ -56,22 +59,23 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
     var panel by rememberSaveable(session.book.id) {mutableStateOf<ReaderPanel?>(null)}
     var page by remember(session.book.id,session.navigationId,settings.layout) {mutableIntStateOf(1)}
     val density = LocalDensity.current
-    var chapterPages by remember(session.book.id,session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,density) {mutableIntStateOf(0)}
+    var chapterPages by remember(session.book.id,session.navigationId,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,density) {mutableIntStateOf(0)}
     var fraction by remember(session.book.id,session.navigationId) {mutableFloatStateOf(session.fraction)}
     var viewport by remember(session.book.id) {mutableStateOf(0 to 0)}
-    var foregroundPages by remember(session.book.id,session.navigationId,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,density) {mutableStateOf<Int?>(null)}
-    var index by remember(session.book.id,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,density) {mutableStateOf<BookPageIndex?>(null)}
+    var foregroundPages by remember(session.book.id,session.navigationId,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,density) {mutableStateOf<Int?>(null)}
+    var index by remember(session.book.id,viewport,settings.layout,settings.fontSize,settings.lineHeight,settings.margin,settings.serif,settings.fontId,density) {mutableStateOf<BookPageIndex?>(null)}
     var error by remember {mutableStateOf<String?>(null)}
     var retry by remember {mutableIntStateOf(0)}
     var seeking by remember(session.book.id,viewport,settings.layout) {mutableStateOf<Float?>(null)}
     var selection by remember(session.book.id,session.navigationId) {mutableStateOf<ReaderSelection?>(null)}
-    var noteDraft by remember {mutableStateOf<Pair<TextAnchor,String>?>(null)}
+    var noteDraft by remember {mutableStateOf<ReaderNoteDraft?>(null)}
     var deleteNotes by remember {mutableStateOf<List<Annotation>?>(null)}
-    val annotations by vm.annotations.collectAsStateWithLifecycle()
+    val annotations by vm.readerAnnotations.collectAsStateWithLifecycle()
     val bookMarks=annotations.filter {it.bookId==session.book.id}
     val controller=remember {ReaderController()}
+    val native=session.book.format=="TXT" && session.book.textEngine!="WEBVIEW"
     val chapter=session.chapters[session.chapter]
-    val current=index?.globalPage(session.chapter,page)
+    val current=if(page>0) index?.globalPage(session.chapter,page) else null
     val total=index?.total
     val context=LocalContext.current
     var convertedSource by remember(session.book.id) { mutableStateOf<io.readx.app.data.Book?>(null) }
@@ -83,8 +87,8 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
     }
     val export=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/epub+zip")) {uri->if(uri!=null) vm.exportConverted(session.book.id,uri)}
 
-    fun closeReader() {controller.view?.finishTransition();controller.view?.report();vm.close()}
-    fun clearSelection() {selection=null;controller.view?.clearReaderSelection()}
+    fun closeReader() {controller.report();controller.captureAnchor {anchor->vm.textAnchor(anchor);vm.close()}}
+    fun clearSelection() {selection=null;controller.clearSelection()}
     fun dismissControls() {panel=null;chrome=false;clearSelection()}
     BackHandler {
         when {selection!=null->clearSelection();panel!=null->panel=null;chrome->dismissControls();session.returnStack.isNotEmpty()->vm.returnFromLink();else->closeReader()}
@@ -92,20 +96,29 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
     Box(Modifier.fillMaxSize()) {
         // Full measured safe area at all times. Controls overlay the page instead of reserving invisible bands.
         val reading=Modifier.fillMaxSize()
-        if(settings.layout==ReadingLayout.PAGED && foregroundPages!=null && viewport.first>0 && viewport.second>0) {
+        if(!native && settings.layout==ReadingLayout.PAGED && foregroundPages!=null && viewport.first>0 && viewport.second>0) {
             BookPageCounter(session.book,session.chapters,settings,vm.repository,viewport,reading,retry,session.chapter,foregroundPages!!) {value,failure->index=value;error=failure}
         }
         val ink="#%06X".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xFFFFFF)
         val paper="#%06X".format(MaterialTheme.colorScheme.background.toArgb() and 0xFFFFFF)
-        WebReader(session,settings,vm.repository,ink,paper,reading.testTag("reader-content"),
+        if(native) NativeTxtReader(session,settings,vm.repository,ink,paper,reading.testTag("reader-content"),bookMarks.filter {it.chapter==session.chapter},controller,
+            {w,h->viewport=w to h},
+            {zone->if(zone==0) {if(panel!=null) panel=null else chrome=!chrome} else {panel=null;chrome=false;controller.turn(zone)}},
+            {selection=it},
+            {position,final,local,count->if(vm.isCurrentNavigation(session.book.id,session.navigationId)) {vm.textAnchor(controller.native?.viewportAnchor);fraction=position;page=local;chapterPages=count;if(final)vm.savePosition(session.book.id,session.chapter,position) else vm.position(session.book.id,session.chapter,position)}},
+            {foregroundPages=it},
+            {direction->vm.chapter(session.chapter+direction,if(direction<0) "__readx_end__" else null)},
+            {vm.notify(it)}, {value,failure->index=value;error=failure})
+        else WebReader(session,settings,vm.repository,ink,paper,reading.testTag("reader-content"),
             {ordinal,target->clearSelection();vm.chapter(ordinal,target)},
             {ordinal,target,origin,anchor->chrome=true;vm.followLink(ordinal,target,origin,anchor)},
             {w,h->viewport=w to h},bookMarks.filter {it.chapter==session.chapter},
             {zone->if(zone==0) {if(panel!=null) panel=null else chrome=!chrome} else {dismissControls();controller.turn(zone)}},
             {value->if(vm.isCurrentNavigation(session.book.id,session.navigationId)) selection=value},
-            {kind,anchor->if(kind=="NOTE") noteDraft=anchor to "" else vm.addTextAnnotation(kind,anchor,"",fraction)},
+            {kind,anchor->if(kind=="NOTE") noteDraft=ReaderNoteDraft(anchor,"") else vm.addTextAnnotation(kind,anchor,"",fraction)},
             {position,final,local,count->
                 if(vm.isCurrentNavigation(session.book.id,session.navigationId)) {
+                    vm.textAnchor(controller.view?.sourceAnchor)
                     fraction=position;page=local;chapterPages=count
                     if(final) vm.savePosition(session.book.id,session.chapter,position) else vm.position(session.book.id,session.chapter,position)
                 } // Explicit close is persisted by the ViewModel before this view is detached.
@@ -113,7 +126,7 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
                 if(vm.isCurrentNavigation(session.book.id,session.navigationId)) foregroundPages=count
             })
         if(!chrome && selection==null) Text(
-            if(chapterPages==0) "排版中…" else if(settings.layout==ReadingLayout.SCROLL) "${(fraction*100).toInt()}%" else if(current!=null && total!=null) "$current / $total" else "本章 $page / $chapterPages · 统计 ${index?.measured ?: 0}/${session.chapters.size}",
+            if(chapterPages==0 && foregroundPages==null) "排版中…" else if(native && (index?.counts?.get(session.chapter) ?: chapterPages)==0) "可阅读 · 页码统计中" else if(settings.layout==ReadingLayout.SCROLL) "本章 ${(fraction*100).toInt()}%" else if(current!=null && total!=null) "$current / $total" else if(native && page==0) "本章文字位置 ${(fraction*100).toInt()}% · 页码统计中" else "本章 $page / ${index?.counts?.get(session.chapter) ?: chapterPages.takeIf {it>0} ?: "统计中"} · 统计 ${index?.measured ?: 0}/${session.chapters.size}",
             modifier=Modifier.align(Alignment.BottomEnd).padding(end=20.dp,bottom=5.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         AnimatedVisibility(chrome,modifier=Modifier.align(Alignment.TopStart),enter=fadeIn(),exit=fadeOut()) {
             Surface(shape=CircleShape,color=MaterialTheme.colorScheme.surfaceContainer.copy(alpha=.94f),modifier=Modifier.padding(10.dp)) {
@@ -131,12 +144,7 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
                                     Text(target?.let {session.chapters[it.first].title} ?: chapter.title,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.titleSmall)
                                     Text(if(total!=null && current!=null && chapterPages>0) "${kotlin.math.round(seeking ?: current.toFloat()).toInt()} / $total" else "统计 ${index?.measured ?: 0}/${session.chapters.size}",style=MaterialTheme.typography.labelMedium)
                                 }
-                                if(total!=null && current!=null && settings.layout==ReadingLayout.PAGED) Slider(seeking ?: current.toFloat(),{seeking=it},
-                                    onValueChangeFinished={index?.locate(kotlin.math.round(seeking ?: current.toFloat()).toInt())?.let {(ordinal,p)->
-                                        clearSelection()
-                                        if(ordinal==session.chapter) controller.jumpToPage(p) else vm.chapter(ordinal,fraction=if(index!!.counts[ordinal]!! == 1) 0f else (p-1f)/(index!!.counts[ordinal]!!-1))
-                                    };seeking=null},valueRange=1f..total.coerceAtLeast(2).toFloat(),enabled=total>1 && chapterPages>0)
-                                else Text(if(error!=null) "统计未完成：$error" else if(settings.layout==ReadingLayout.SCROLL) "滚动模式不显示固定页数" else "按当前排版统计中…",style=MaterialTheme.typography.bodySmall)
+                                Text(if(error!=null) "统计未完成：$error" else if(settings.layout==ReadingLayout.SCROLL) "滚动模式使用文字位置恢复" else "长按底栏页码可精确跳转；未知总页数时不会估算。",style=MaterialTheme.typography.bodySmall)
                                 if(error!=null) TextButton(onClick={retry++}) {Text("重新统计")}
                                 if(isConverted) Row {
                                     TextButton(onClick={
@@ -152,10 +160,19 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
                                 if(session.returnStack.isNotEmpty()) TextButton(onClick=vm::returnFromLink) {Text("回到原处")}
                             }
                             ReaderPanel.PAPER->ReaderPaperPanel(settings,vm.preferences::update)
-                            ReaderPanel.TYPE->ReaderTypePanel(settings,vm.preferences::update,showSettings)
+                            ReaderPanel.TYPE->Column {
+                                if(session.book.format=="TXT") Row(Modifier.fillMaxWidth().padding(horizontal=24.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                                    listOf("NATIVE" to "原生","WEBVIEW" to "WebView").forEach {(engine,label)->FilterChip(selected=if(engine=="NATIVE") native else !native,onClick={controller.captureAnchor {anchor->vm.switchTextEngine(engine,anchor)}},label={Text(label)})}
+                                }
+                                ReaderTypePanel(settings,vm.preferences::update,showSettings)
+                                LocalFontOptions(vm)
+                            }
                             else->Spacer(Modifier.height(0.dp))
                         }
                     }
+                    ReadingProgressControl(current,total,chapter.title,
+                        {target->index?.locate(target)?.let {(ordinal,p)->if(ordinal==session.chapter)controller.jumpToPage(p) else vm.chapter(ordinal,fraction=if(index!!.counts[ordinal]!! ==1)0f else (p-1f)/(index!!.counts[ordinal]!!-1),requestedPage=if(native)p else null)}},
+                        {clearSelection();vm.chapter(session.chapter-1)}, {clearSelection();vm.chapter(session.chapter+1)},session.chapter>0,session.chapter<session.chapters.lastIndex)
                     Row(Modifier.fillMaxWidth().heightIn(min=64.dp).padding(horizontal=8.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceEvenly) {
                         ReaderPanel.entries.forEach {item->
                             FilledTonalIconToggleButton(checked=panel==item,onCheckedChange={clearSelection();panel=if(panel==item) null else item}) {
@@ -187,7 +204,7 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
     }
     if(panel==ReaderPanel.ANNOTATIONS) ModalBottomSheet(onDismissRequest={panel=null},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)) {
         Column(Modifier.fillMaxHeight().padding(horizontal=20.dp)) {
-            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {Text("本书批注",Modifier.weight(1f),style=MaterialTheme.typography.headlineSmall);IconButton(onClick={vm.addBookmark()}) {Icon(Icons.Rounded.BookmarkAdd,"添加位置书签")};TextButton(onClick={panel=null}) {Text("完成")}}
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {Text("本书批注",Modifier.weight(1f),style=MaterialTheme.typography.headlineSmall);AnnotationExportActions(session.book,vm);IconButton(onClick={vm.addBookmark()}) {Icon(Icons.Rounded.BookmarkAdd,"添加位置书签")};TextButton(onClick={panel=null}) {Text("完成")}}
             if(bookMarks.isEmpty()) Text("长按正文即可划线或写想法。",Modifier.padding(24.dp))
             LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(bottom=24.dp)) {items(bookMarks,key={it.id}) {mark->
                 AnnotationCard(mark,{vm.openAnnotation(mark);panel=null;chrome=false},{vm.deleteAnnotation(mark)},{note->vm.updateAnnotation(mark,note)})
@@ -202,17 +219,17 @@ internal fun ImmersiveReaderScreen(session: ReaderSession,settings: ReaderSettin
             copy={val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager;clipboard.setPrimaryClip(ClipData.newPlainText("ReadX 选段",picked.anchor.quote));clearSelection();vm.notify("已复制所选文字")},
             highlight={vm.addTextAnnotation("HIGHLIGHT",picked.anchor,"",fraction);clearSelection()},
             underline={vm.addTextAnnotation("UNDERLINE",picked.anchor,"",fraction);clearSelection()},
-            note={val old=rows.firstOrNull {it.kind=="NOTE"}?.note ?: primary?.note.orEmpty();noteDraft=picked.anchor to old;clearSelection()},
+            note={val old=primary?.takeIf {it.kind=="NOTE"} ?: rows.filter {it.kind=="NOTE"}.maxByOrNull {maxOf(it.updatedAt,it.createdAt)};noteDraft=ReaderNoteDraft(picked.anchor,old?.note ?: primary?.note.orEmpty(),old);clearSelection()},
             remove={if(rows.any {it.kind=="HIGHLIGHT" || it.kind=="UNDERLINE"}) {vm.removeTextMarks(picked.anchor,picked.annotationIds);clearSelection()} else {deleteNotes=rows.filter {it.kind=="NOTE"};clearSelection()}},hasMark=rows.isNotEmpty(),dismiss=::clearSelection)
     }
-    noteDraft?.let {(anchor,old)->AnnotationEditor(anchor.quote,old) {note->if(note!=null) vm.addTextAnnotation("NOTE",anchor,note,fraction);noteDraft=null} }
+    noteDraft?.let {draft->AnnotationEditor(draft.anchor.quote,draft.note) {note->if(note!=null) {if(draft.existing!=null)vm.updateAnnotation(draft.existing,note) else vm.addTextAnnotation("NOTE",draft.anchor,note,fraction)};noteDraft=null} }
     deleteNotes?.let {rows->AlertDialog(onDismissRequest={deleteNotes=null},title={Text("删除选段的笔记？")},text={Text("会删除 ${rows.size} 条文字笔记，不修改原书。")},confirmButton={TextButton(onClick={rows.forEach(vm::deleteAnnotation);deleteNotes=null}) {Text("删除")}},dismissButton={TextButton(onClick={deleteNotes=null}) {Text("取消")}}) }
 }
 
 @Composable
 private fun ReaderSelectionPopup(selection: ReaderSelection,controller: ReaderController,selectedColor: String,primary: Annotation?,onColor:(String)->Unit,copy:()->Unit,highlight:()->Unit,underline:()->Unit,note:()->Unit,remove:()->Unit,hasMark:Boolean,dismiss:()->Unit) {
     val density=LocalDensity.current.density
-    val origin=IntArray(2);controller.view?.getLocationInWindow(origin)
+    val origin=IntArray(2);(controller.native ?: controller.view)?.getLocationInWindow(origin)
     val r=selection.bounds
     val rect=Rect(origin[0]+r.left*density,origin[1]+r.top*density,origin[0]+r.right*density,origin[1]+r.bottom*density)
     val provider=remember(rect,density) {object:PopupPositionProvider {
@@ -226,16 +243,16 @@ private fun ReaderSelectionPopup(selection: ReaderSelection,controller: ReaderCo
     }}
     Popup(popupPositionProvider=provider,onDismissRequest=dismiss,properties=PopupProperties(focusable=false,dismissOnBackPress=false,dismissOnClickOutside=false)) {
         Surface(shape=RoundedCornerShape(20.dp),color=MaterialTheme.colorScheme.surfaceContainerHighest,shadowElevation=8.dp,modifier=Modifier.widthIn(max=370.dp).testTag("selection-menu")) {
-            Column(Modifier.padding(horizontal=8.dp,vertical=8.dp)) {
-                Row(Modifier.width(340.dp),horizontalArrangement=Arrangement.SpaceEvenly) {
-                    SelectionAction(Icons.Rounded.ContentCopy,"复制",copy)
-                    SelectionAction(Icons.Rounded.Highlight,"荧光笔",highlight)
-                    SelectionAction(Icons.Rounded.FormatUnderlined,"划线",underline)
-                    SelectionAction(Icons.Rounded.EditNote,if(primary?.note?.isNotBlank()==true) "编辑想法" else "写想法",note)
-                    if(hasMark) SelectionAction(Icons.Rounded.DeleteOutline,"取消标记",remove)
+            SelectionBubbleActions(primary?.color ?: selectedColor,onColor,copy,highlight,underline,note,primary?.note?.isNotBlank()==true,if(hasMark)remove else null,dismiss) {
+                if(!selection.fromMark) Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    TextButton(onClick={controller.selectionPage(-1)}) {Text("上一页选区")}
+                    TextButton(onClick={controller.selectionPage(1)}) {Text("下一页选区")}
+                    TextButton(onClick={controller.snapSelection(SelectionUnit.WORD)}) {Text("词")}
+                    TextButton(onClick={controller.snapSelection(SelectionUnit.SENTENCE)}) {Text("句")}
                 }
-                HorizontalDivider(Modifier.padding(horizontal=8.dp,vertical=6.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=.3f))
-                MarkColorPicker(primary?.color ?: selectedColor,onColor)
             }
         }
     }

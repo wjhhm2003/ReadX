@@ -186,3 +186,50 @@ PDF Activity 的原生根布局独占 systemBars/displayCutout/IME 安全区；�
 - `SystemNavigationProtection` 只在系统手势带画同色背景，不添加 padding；正文工具栏展开时通过回调选择 surfaceContainerHigh，隐藏时选择纸张色。因此显隐不改变 WebView 高度，也不触发分页。
 - PDF 的原生根布局继续唯一负责 systemBars/cutout/IME padding。根布局 dispatchDraw 只补画已保留的 navigationBars 底色；Compose 不再次消费 PDF 系统边距。旧系统导航栏颜色由同一显示层同步，Theme 仅管理系统栏明暗图标。
 - 设备回归确认程序关闭阅读后，销毁中的 WebView 可返回已偏移的 scrollX（目标第3页，后续旧回调曾覆盖为第2页）。`LibraryViewModel.close` 在移除 session 前持久化最后一次有效进度；关闭后不再接受旧 view 的 final 覆盖。UI 退出先结束翻页动画并 report；仍保留活动 session 的生命周期最终落盘，数据库与位置语义不变。
+
+
+## 0.6.0 原生 TXT / 文字锚点 / PDF 裁边
+
+### 双引擎与兼容坐标
+
+- EPUB 继续走受控 WebView；TXT 的 `Book.textEngine` 可空，空值语义是 NATIVE，不批量改旧行。切换通过 ViewModel 在卸载旧视图前捕获文字锚点，不传另一引擎的页码。`ReaderLocation` 保留章节、TextAnchor 和兼容 fraction；数据库只存可验证定位数据，不存 WebView/StaticLayout/PdfDocument 句柄。
+- `NativeTextSource` 流式读取**现有应用生成的 TXT HTML**，UTF-16BE 派生文件保存 canonical body 文本（包含 HTML 序列化缩进）及 native display 文本（块间两换行）；Run 表记录二者的对应关系，二分映射。数据库正文含不同标题/空行，绝不能当作旧 DOM 批注坐标。派生索引不是对任意 EPUB HTML 的通用解析器；EPUB 不走该索引。
+- TXT 索引、读取、验证在 IO 调度器，StaticLayout 在单并行度 Default 调度器，每次窗口由实际宽高/字阶约束在 1024–8192 UTF-16 单位；Canvas 只绘制当前窗口、滚动时的一个邻窗。源内容不被修改，字符代理对端点安全校验。
+- 前台用户输入让后台测量退让；全书只有一个 Compose 会话拥有的可取消任务，逐页测量、分批原子保存真实边界，逐章保存部分统计。布局缓存键包括源指纹、章节、引擎版本、视口、density/fontScale、字号/字体/行高/页边距、系统/locale，不包括纸张或标记色。TXT 中部无缓存恢复可先显示锚点附近文字窗口，未知全书总数/页码不能精确化。
+- 旧 DOM 位置首先验证偏移+引用+上下文；不符时分块搜索唯一候选，歧义不猜测。原生选段转换为 canonical UTF-16 后存储，因此 WebView 可继续识别。书籍中原有 h1/p/href 和章节编号不变。
+- `Book.readingAnchor`、`Bookmark.textAnchor` 可空，Room `MIGRATION_5_6` 仅追加列；旧 chapter/fraction 完全保留。标记 upsert 和历史重复笔记策略不变。阅读页单独订阅当前 bookId，书架的全库批注订阅在文本阅读时暂停。
+- WebView 脚本缓存文本节点/合并文字，DOM 标记范围变更后失效；仅颜色/笔记元数据变化时原位 restyle，不 normalize/替换 text nodes；无标记的初始加载不调用全章 marks/normalize。触摸不在每次 DOWN 重扫全文；视口变更在视觉提交后捕获。隐藏统计渲染器在触摸时取消未完成工作，空闲 600ms 才恢复。原生脚本入口仍有 URI/加载代次检查、CSP 和 JSON 参数编码，无 JS 桥与网络。
+
+### PDF 裁边与坐标
+
+- `PdfCropConfig` 是 v6 的按书 JSON 配置：开启/自动、全书规则、奇偶规则、当前页覆盖；零起始 page 的奇偶判定使用用户显示的 page+1。关闭规则不删原批注。规则优先级 PAGE > ODD/EVEN > ALL > AUTO。
+- 自动检测用至多 384px 的预览，边缘 RGB 中位数、边缘一致性/亮度检查、横纵内容投影与 2.5%/至少4px 安全边距。保留小页码/脚注/边注投影；空白、暗背景或不可靠检测回退 FULL。不是 OCR、语义页码检测或智能重排。
+- 开启裁边后使用应用 Canvas + HorizontalPager/LazyColumn。高级系统使用既有 PdfDocument 的公开渲染、selection、searchDocument、getPageLinks；基本系统只用 PdfRenderer 的渲染和区域坐标。关闭后继续原高级纵向 fragment。没有反射修改 AndroidX 布局或绕过系统能力条件。
+- `PdfCoordinateTransform` 同时描述裁边、适配缩放、缩放倍率、平移、居中；绘制、触摸、链接、搜索矩形和 sidecar 批注统一逆变换/正变换。批注保存原页归一化坐标；阅读进度仍为原页+原页 y fraction，不产生裁边页数。原页内不可见位置在手动裁掉区域外时钳制到可见区域，而不是伪造已读进度。
+- 每个会话拥有按 `Bitmap.allocationByteCount` 计费的 32 MiB LRU，不回收仍被可见 Canvas 引用的位图；缓存上限不等于总 PSS。当前视口按需渲染与自动检测任务在滚走/改配置/退出时取消，不预渲染全书。PDF BitmapSource 总在 finally 关闭，基础 PdfRenderer 由仓库有限生命周期关闭任务释放。
+- 选区菜单复用复制、标记色、高亮/划线、笔记编辑/取消语义；新 PDF 矩形端点在原页空间维护，变换后拖动。扫描件无文字层时明确区域选择。旋转原 PDF 页的四边形、批注导出、智能重排不在本轮范围。
+
+参考研究范围和许可边界见 THIRD_PARTY；实现与验证边界见 TESTING，不以论文/参考引擎机制冒充已验收功能。
+
+
+## 0.6.1 PDF 单页分页居中（2026-10-05）
+
+- 单页分页在实际可用阅读区域以适配后的页面宽、高计算 left/top 居中偏移，原版横向查看器、裁边横向查看器及基础单页回退一致。连续纵向列表不增加每页上下屏幕空白，高级纵向查看器保持既有布局。
+- `PdfCoordinateTransform.top` 是可选视图偏移，放在既有参数之后，默认 0；正变换先加入 top 再缩放/平移，逆变换先去平移/缩放再减去 top。原页归一化定位/Room schema 不变。
+- 非裁边横向绘制、批注和触摸反算同步增加 top；裁边同步修改位图起点、裁剪矩形、批注/搜索绘制、选区端点及菜单边界。
+- 本次用户明确要求不测试：仅构建 Preview，不运行 JVM/设备测试或安装启动验收。
+
+
+## 0.7.0 打磨与隐私边界（2026-10-05）
+
+- 书库合并主页，最近在读可折叠；网格按懒加载行组织，窄屏2列/宽屏3列，与列表复用真实封面和书籍操作。文件大小由 Repository IO 调度器读取应用私有源副本，排序不引入 Room 新字段/扫描整本内容。长按只编辑元数据与自定义封面，封面限16 MiB、采样至1024边长后存为独立JPEG；默认封面和原书不修改。
+- 按书批注导出以 DAO 当前记录快照分章/时间排序，包含旧重复笔记。Markdown 转义标记/HTML字符，TXT 保留原文；SAF 写入在IO任务中进行，复制限10万UTF-16单位，避免大Binder载荷，过大明确切换文件导出。UUID、DOM定位与PDF原页矩形不改变，无schema迁移。
+- 阅读页下栏共享 ReadingProgressControl；仅真实页总数可输入/拖动，未完成统计禁用精确页码并解释。原生引擎跨章使用真实页边界请求，不把全书页码换算为DB正文偏移；PDF滑条仍为原文页体系。
+- 选区工具栏是 Compose Material3 anchored bubble（不声称使用不存在的原生接口），短操作行、按需颜色、词/句与同章跨页。原生使用有界窗口+BreakIterator，WebView 通过受控Intl.Segmenter/回退维护 Range；吸附保护代理对和16384单位限制。批注跳转短淡入/临时闪烁，闪烁仅绘制不落库、不重新分页。
+- 裁边底部预览编辑器使用8个可见手柄，raw边框累积拖动，显示边框磁吸到原页/预览检测边缘，避免每事件吸附导致手柄无法离开。范围、启用、自动配置在草稿中，取消全部丢弃；确认才保存。原页矩形仍由PdfCoordinateTransform统一变换。
+- 字体来源只接受本地 SAF TTF/OTF，检查sfnt表目录/范围、大小、系统加载有效性。复制到私有 reader-fonts/<sha256>.font；缓存布局含fontId，排版变更先保存文字锚点。WebView字体仅通过同源受控/reader-fonts/<hash>.font读取；仍blockNetworkLoads/CSP/无file/content访问。字体名只展示不插入CSS，字体二进制不进Git，最多12个以限制资源。
+- 转换继续任务仍检查各页原子检查点，已完成页不重扫；失败诊断记录原文页/处理阶段及有限原因类别，不记录正文或原始敏感异常栈。模型变化使旧OCR结果失效时不宣传为全量无损复用。
+- 在线模型为唯一新增网络入口：默认onlineModels=false，官方固定提交/三语言清单，HTTPS、拒绝重定向、大小/SHA256双校验及本地Tesseract初始化。WorkManager有限任务、真实字节进度、失败提示；不依赖系统已验证互联网标志，以免阻塞仍能访问固定模型地址的部分连通网络，离线请求明确失败且不自动循环重试；关闭/重置使generation失效并取消任务，下载与激活都检查当前代次，未完成临时文件清理。最迟阻塞读取超时后释放连接；已安装模型不删除。读取/识别始终本地，无上传API。
+- 2026-10-05 用户已确认此可关闭隐私边界变化；加入 INTERNET/ACCESS_NETWORK_STATE，其他联网增强依然需独立授权。在线清单与内置清单一致，普通版只打包清单，不打包模型。
+
+- 本轮输入法只影响弹层/输入控件，文本正文背景层排除临时IME Insets，避免精确页码输入后回到另一套分页。空白选区吸附到附近词边界而不折叠；裁边手柄仅对自身触摸区设置系统返回手势排除，其余区域仍可返回。

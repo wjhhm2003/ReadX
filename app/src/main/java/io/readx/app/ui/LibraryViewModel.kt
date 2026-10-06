@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.*
 
 data class ReaderLocation(val chapter: Int, val fraction: Float, val anchor: TextAnchor? = null)
 
-data class ReaderSession(val book: Book, val chapters: List<Chapter>, val chapter: Int = book.chapterIndex, val fraction: Float = book.scrollFraction, val target: String? = null, val find: String? = null, val occurrence: Int = 0, val navigationId: Long = 0, val anchor: TextAnchor? = null, val returnStack: List<ReaderLocation> = emptyList())
+data class ReaderSession(val book: Book, val chapters: List<Chapter>, val chapter: Int = book.chapterIndex, val fraction: Float = book.scrollFraction, val target: String? = null, val find: String? = null, val occurrence: Int = 0, val navigationId: Long = 0, val anchor: TextAnchor? = null, val returnStack: List<ReaderLocation> = emptyList(), val requestedPage: Int? = null,val flashAnchor:Boolean=false)
 data class SearchHit(val book: Book, val chapter: Chapter, val snippet: String, val query: String, val occurrence: Int)
 
 class LibraryViewModel(app: Application) : AndroidViewModel(app) {
@@ -35,8 +35,39 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     val books = repository.books.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val annotations = repository.dao.observeAnnotations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val bookmarks = repository.dao.observeBookmarks().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val fontStore=io.readx.app.reader.LocalFontStore(app)
+    private val _fonts=MutableStateFlow<List<io.readx.app.reader.LocalFont>>(emptyList())
+    val fonts=_fonts.asStateFlow()
+    init {viewModelScope.launch {_fonts.value=fontStore.list();val stored=ReaderPreferences(app);if(!io.readx.app.reader.LocalFontStore.prepare(app,stored.settings.value.fontId))stored.update(stored.settings.value.copy(fontId=null))}}
+    fun importFont(uri:Uri)=viewModelScope.launch {
+        try {val font=fontStore.import(uri);_fonts.value=fontStore.list();preferences.update(settings.value.copy(fontId=font.id));notify("已导入并启用本地字体")}
+        catch(e:CancellationException) {throw e} catch(e:Exception) {notify(e.message ?: "字体导入失败")}
+    }
+    fun deleteFont(font:io.readx.app.reader.LocalFont)=viewModelScope.launch {
+        try {
+            fontStore.delete(font.id)
+            _fonts.value=fontStore.list()
+            if(settings.value.fontId==font.id) {
+                preferences.update(settings.value.copy(fontId=null))
+            }
+            notify("已删除字体「${font.name}」")
+        } catch(e:CancellationException) {throw e} catch(e:Exception) {notify(e.message ?: "字体删除失败")}
+    }
+    fun changeCover(book:Book,uri:Uri)=viewModelScope.launch {try {repository.changeCover(book.id,uri);notify("已更换封面（不修改原书）")}catch(e:CancellationException) {throw e}catch(e:Exception) {notify(e.message ?: "封面更新失败")}}
+    fun exportAnnotations(book:Book,uri:Uri,markdown:Boolean)=viewModelScope.launch {try {repository.exportAnnotations(book.id,uri,markdown);notify("批注已导出")}catch(e:CancellationException) {throw e}catch(e:Exception) {notify(e.message ?: "批注导出失败")}}
+    fun copyAnnotations(book:Book)=viewModelScope.launch {try {
+        val value=repository.annotationText(book.id,true)
+        (getApplication<Application>().getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("ReadX 批注",value));notify("已复制整书批注")
+    }catch(e:CancellationException) {throw e}catch(e:Exception) {notify(e.message ?: "复制失败")}}
+    val downloads=androidx.work.WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(io.readx.app.conversion.OcrDownloadPolicy.NAME).stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
+    fun onlineModels(enabled:Boolean) {
+        preferences.update(settings.value.copy(onlineModels=enabled))
+        if(!enabled)io.readx.app.conversion.OcrDownloadPolicy.cancel(getApplication())
+    }
+    fun downloadModels() {try {io.readx.app.conversion.OcrDownloadPolicy.enqueue(getApplication(),settings.value.ocrLanguages)}catch(e:Exception) {notify(e.message ?: "无法下载模型")}}
     val preferences = ReaderPreferences(app)
     private var latestFraction = 0f
+    private var latestAnchor: TextAnchor? = null
     private var navigationSerial = 0L
     private fun nextNavigationId() = ++navigationSerial
     val settings = preferences.settings
@@ -46,6 +77,16 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     val message = _message.asStateFlow()
     private val _reader = MutableStateFlow<ReaderSession?>(null)
     val reader = _reader.asStateFlow()
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val readerAnnotations = _reader.map {it?.book?.id}.distinctUntilChanged().flatMapLatest {id->if(id==null) flowOf(emptyList()) else repository.dao.annotationsForBook(id)}.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
+    fun textAnchor(anchor: TextAnchor?) { if(anchor!=null) latestAnchor=anchor }
+    fun switchTextEngine(engine: String, anchor: TextAnchor?) = viewModelScope.launch {
+        val session=_reader.value ?: return@launch
+        if(session.book.format!="TXT" || engine !in listOf("NATIVE","WEBVIEW")) return@launch
+        repository.dao.saveTextEngine(session.book.id,engine)
+        latestAnchor=anchor
+        _reader.value=session.copy(book=session.book.copy(textEngine=engine),anchor=anchor,fraction=latestFraction,navigationId=nextNavigationId(),requestedPage=null,flashAnchor=false)
+    }
     private val _hits = MutableStateFlow<List<SearchHit>>(emptyList())
     val hits = _hits.asStateFlow()
     private val _searching = MutableStateFlow(false)
@@ -56,7 +97,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addBookmark() = viewModelScope.launch {
         val s = _reader.value ?: return@launch
-        val mark = Bookmark(UUID.randomUUID().toString(), s.book.id, s.chapter, latestFraction, s.chapters[s.chapter].title)
+        val mark = Bookmark(UUID.randomUUID().toString(), s.book.id, s.chapter, latestFraction, s.chapters[s.chapter].title,textAnchor=latestAnchor?.json()?.toString())
         repository.dao.insertPositionBookmark(mark)
         notify("已添加书签")
     }
@@ -68,7 +109,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             val chapters = repository.dao.chapters(book.id)
             if (chapters.isNotEmpty()) {
                 latestFraction = bookmark.fraction
-                _reader.value = ReaderSession(book, chapters, bookmark.chapter.coerceIn(chapters.indices), bookmark.fraction, navigationId = nextNavigationId())
+                latestAnchor=bookmark.textAnchor?.let(TextAnchor::parse)
+                _reader.value = ReaderSession(book, chapters, bookmark.chapter.coerceIn(chapters.indices), bookmark.fraction, navigationId = nextNavigationId(),anchor=bookmark.textAnchor?.let(TextAnchor::parse))
             }
         }
     }
@@ -141,38 +183,45 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         catch(e: CancellationException) {throw e} catch(_: Exception) {notify("导出失败，请重新选择保存位置")}
     }
     fun open(book: Book) {
+        io.readx.app.reader.ReaderPerformance.begin()
         openJob?.cancel()
         openJob = viewModelScope.launch {
             try {
                 val latest = repository.dao.book(book.id) ?: return@launch
+                io.readx.app.reader.LocalFontStore.prepare(getApplication(),settings.value.fontId)
                 val chapters = repository.dao.chapters(book.id)
+                io.readx.app.reader.ReaderPerformance.mark("chapter_prepared")
                 if (chapters.isEmpty()) return@launch
                 latestFraction = latest.scrollFraction
-                _reader.value = ReaderSession(latest, chapters, latest.chapterIndex.coerceIn(chapters.indices), navigationId = nextNavigationId())
+                latestAnchor=latest.readingAnchor?.let(TextAnchor::parse)
+                _reader.value = ReaderSession(latest, chapters, latest.chapterIndex.coerceIn(chapters.indices), navigationId = nextNavigationId(),anchor=latestAnchor)
                 repository.dao.savePosition(book.id, _reader.value!!.chapter, latest.scrollFraction, System.currentTimeMillis())
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { notify(e.message ?: "打开失败") }
         }
     }
-    fun chapter(index: Int, target: String? = null, fraction: Float = 0f) {
+    fun chapter(index: Int, target: String? = null, fraction: Float = 0f, requestedPage: Int? = null) {
         val session = _reader.value ?: return
         if (index !in session.chapters.indices) return
-        _reader.value = session.copy(chapter = index, fraction = fraction, target = target, find = null, anchor = null, navigationId = nextNavigationId())
+        latestAnchor=null
+        _reader.value = session.copy(chapter = index, fraction = fraction, target = target, find = null, anchor = null, navigationId = nextNavigationId(),requestedPage=requestedPage,flashAnchor=false)
         savePosition(session.book.id, index, fraction)
     }
     fun followLink(index: Int, target: String?, sourceFraction: Float, sourceAnchor: TextAnchor? = null) {
         val session = _reader.value ?: return
         if (index !in session.chapters.indices) return
+        latestAnchor=null
         val origin = ReaderLocation(session.chapter, sourceFraction.coerceIn(0f, 1f), sourceAnchor)
         _reader.value = session.copy(chapter = index, fraction = 0f, target = target, find = null, anchor = null,
-            navigationId = nextNavigationId(), returnStack = (session.returnStack + origin).takeLast(32))
+            navigationId = nextNavigationId(), requestedPage=null, returnStack = (session.returnStack + origin).takeLast(32))
         savePosition(session.book.id, index, 0f)
     }
     fun returnFromLink() {
         val session = _reader.value ?: return
         val origin = session.returnStack.lastOrNull() ?: return
+        latestAnchor=origin.anchor
         _reader.value = session.copy(chapter = origin.chapter, fraction = origin.fraction, target = null, find = null, anchor = origin.anchor,
-            navigationId = nextNavigationId(), returnStack = session.returnStack.dropLast(1))
+            navigationId = nextNavigationId(), requestedPage=null, returnStack = session.returnStack.dropLast(1))
         savePosition(session.book.id, origin.chapter, origin.fraction)
     }
     fun addTextAnnotation(kind: String, anchor: TextAnchor, note: String, fraction: Float, color: String = settings.value.annotationColor) = viewModelScope.launch {
@@ -207,7 +256,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             if (chapters.isEmpty()) return@launch
             latestFraction = annotation.fraction
             _reader.value = ReaderSession(book, chapters, annotation.chapter.coerceIn(chapters.indices), annotation.fraction,
-                navigationId = nextNavigationId(), anchor = TextAnchor.parse(annotation.locator))
+                navigationId = nextNavigationId(), anchor = TextAnchor.parse(annotation.locator),flashAnchor=true)
         }
     }
     fun isCurrentNavigation(id: String, navigationId: Long): Boolean =
@@ -219,14 +268,14 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         latestFraction = fraction
         // Do not mutate reader state on every scroll; that would rebuild the WebView.
         positionJob?.cancel()
-        positionJob = viewModelScope.launch { delay(350); repository.dao.savePosition(id, chapter, fraction.coerceIn(0f, 1f), System.currentTimeMillis()) }
+        positionJob = viewModelScope.launch { delay(350); repository.dao.saveTextPosition(id, chapter, fraction.coerceIn(0f, 1f), System.currentTimeMillis(),latestAnchor?.json()?.toString()) }
     }
     fun savePosition(id: String, chapter: Int, fraction: Float) {
         val current = _reader.value
         if (current != null && (current.book.id != id || current.chapter != chapter)) return
         positionJob?.cancel()
         latestFraction = fraction
-        positionJob = repository.persistPosition(id, chapter, fraction)
+        positionJob = repository.persistPosition(id, chapter, fraction,latestAnchor?.json()?.toString())
     }
     fun close() {
         openJob?.cancel()

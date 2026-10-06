@@ -27,9 +27,14 @@ data class ReaderSettings(
     val lineHeight: Float = 1.8f,
     val margin: Float = 24f,
     val serif: Boolean = true,
+    val fontId:String?=null,
+    val onlineModels:Boolean=false,
+    val shelfGrid:Boolean=false,
+    val shelfSort:String="RECENT",
+    val appTheme:ReadingTheme=ReadingTheme.SYSTEM,
 )
 
-class ReaderPreferences(context: Context) {
+class ReaderPreferences(private val context: Context) {
     private val prefs = context.getSharedPreferences("reader-settings", Context.MODE_PRIVATE)
     private fun read() = ReaderSettings(
         accent = ThemeAccent.entries.firstOrNull { it.name == prefs.getString("accent", "BLUE") } ?: ThemeAccent.BLUE,
@@ -45,6 +50,11 @@ class ReaderPreferences(context: Context) {
         lineHeight = prefs.getFloat("lineHeight", 1.8f).coerceIn(1.2f, 2.6f),
         margin = prefs.getFloat("margin", 24f).coerceIn(12f, 48f),
         serif = prefs.getBoolean("serif", true),
+        fontId=prefs.getString("fontId",null)?.takeIf {it.matches(Regex("[0-9a-f]{64}"))},
+        onlineModels=prefs.getBoolean("onlineModels",false),
+        shelfGrid=prefs.getBoolean("shelfGrid",false),
+        shelfSort=prefs.getString("shelfSort","RECENT").orEmpty(),
+        appTheme=ReadingTheme.entries.firstOrNull {it.name==prefs.getString("appTheme","SYSTEM")} ?: ReadingTheme.SYSTEM,
     )
     private val state = MutableStateFlow(read())
     // SharedPreferences keeps listeners weakly: hold it while this wrapper is alive, without an Activity leak.
@@ -55,11 +65,14 @@ class ReaderPreferences(context: Context) {
     fun reset() = update(ReaderSettings())
 
     fun update(value: ReaderSettings) {
+        if(!value.onlineModels && state.value.onlineModels) io.readx.app.conversion.OcrDownloadPolicy.cancel(context)
         state.value = value
         prefs.edit().putBoolean("pdfToEpubEnabled", value.pdfToEpubEnabled).putString("ocrLanguages",value.ocrLanguages).putString("accent", value.accent.name).putBoolean("dynamicColors", value.dynamicColors)
             .putString("customAccent",value.customAccent).putString("annotationColor",value.annotationColor)
             .putString("pdfLayout", value.pdfLayout.name).putString("theme", value.theme.name).putString("layout", value.layout.name)
             .putFloat("fontSize", value.fontSize).putFloat("lineHeight", value.lineHeight)
-            .putFloat("margin", value.margin).putBoolean("serif", value.serif).apply()
+            .putFloat("margin", value.margin).putBoolean("serif", value.serif)
+            .putBoolean("onlineModels",value.onlineModels).putString("fontId",value.fontId).putBoolean("shelfGrid",value.shelfGrid).putString("shelfSort",value.shelfSort)
+            .putString("appTheme",value.appTheme.name).apply()
     }
 }

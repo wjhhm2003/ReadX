@@ -50,7 +50,7 @@ import kotlin.math.min
 
 /** Normalized page-space boxes survive zoom, rotation of the device, and different rendering resolutions. */
 data class PdfBox(val page: Int, val left: Float, val top: Float, val right: Float, val bottom: Float)
-data class PdfSelection(val quote: String, val boxes: List<PdfBox>,val existingIds: List<String> = emptyList())
+data class PdfSelection(val quote: String, val boxes: List<PdfBox>,val existingIds: List<String> = emptyList(),val windowBounds: androidx.compose.ui.geometry.Rect? = null)
 object PdfLocators {
     fun encode(boxes: List<PdfBox>): String {
         val values=JSONArray(); boxes.forEach { b->values.put(JSONObject().put("page",b.page).put("left",b.left).put("top",b.top).put("right",b.right).put("bottom",b.bottom)) }
@@ -72,14 +72,14 @@ object PdfLocators {
 }
 
 /** PdfRenderer fallback is used only when the advanced document service is unavailable. */
-private class NativePdfSource(file: File) {
+internal class NativePdfSource(file: File) {
     private val descriptor=ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY)
     private val renderer=try { PdfRenderer(descriptor) } catch(e: Exception) {descriptor.close();throw e}
     private val lock=Mutex()
     val count=renderer.pageCount
-    suspend fun render(index: Int): RenderedPdfPage=withContext(Dispatchers.IO) { lock.withLock {
+    suspend fun render(index: Int, target: Int = 1280): RenderedPdfPage=withContext(Dispatchers.IO) { lock.withLock {
         renderer.openPage(index).use { p->
-            val size=renderSize(p.width,p.height)
+            val size=renderSize(p.width,p.height,target)
             val bitmap=Bitmap.createBitmap(size.width,size.height,Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.WHITE);p.render(bitmap,null,null,PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             RenderedPdfPage(bitmap,p.width,p.height)
@@ -97,16 +97,16 @@ private class NativePdfSource(file: File) {
     } }
     suspend fun close()=withContext(Dispatchers.IO) {lock.withLock {renderer.close();descriptor.close()}}
 }
-private data class RenderedPdfPage(val bitmap: Bitmap,val width: Int,val height: Int)
-private fun renderSize(width: Int,height: Int): Size {
+internal data class RenderedPdfPage(val bitmap: Bitmap,val width: Int,val height: Int)
+internal fun renderSize(width: Int,height: Int,target: Int = 1280): Size {
     require(width>0 && height>0) {"PDF 页面尺寸无效"}
-    val scale=min(1280f/width,2300f/height).coerceAtLeast(.01f)
+    val scale=min(target.toFloat()/width,(target*1.8f)/height)
     return Size((width*scale).toInt().coerceAtLeast(1),(height*scale).toInt().coerceAtLeast(1))
 }
 
 @Composable
 fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: PdfDocument?, useAdvanced: Boolean,
-    annotations: List<Annotation>, requestedPage: Int?, onPage: (Int,Int)->Unit, onSelection: (PdfSelection)->Unit,onTapPage: ()->Unit = {}) {
+    annotations: List<Annotation>, requestedPage: Int?, onPage: (Int,Int)->Unit, onSelection: (PdfSelection)->Unit,onTapPage: ()->Unit = {}, flashBoxes:List<PdfBox> = emptyList()) {
     var native by remember(book.id) { mutableStateOf<NativePdfSource?>(null) }
     var error by remember(book.id) { mutableStateOf<String?>(null) }
     val scope=rememberCoroutineScope()
@@ -151,9 +151,10 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                 val transform=rememberTransformableState { scale,offset,_->zoom=(zoom*scale).coerceIn(1f,5f);pan=if(zoom<=1f) Offset.Zero else pan+offset }
                 val fit=if(size.width>0 && size.height>0) min(size.width.toFloat()/image.width,size.height.toFloat()/image.height) else 1f
                 val left=(size.width-image.width*fit)/2
-                fun toPdf(offset: Offset)=PointF(((offset.x-pan.x)/zoom-left).div(fit).coerceIn(0f,image.width.toFloat()),((offset.y-pan.y)/zoom/fit).coerceIn(0f,image.height.toFloat()))
+                val top=((size.height-image.height*fit)/2).coerceAtLeast(0f)
+                fun toPdf(offset: Offset)=PointF(((offset.x-pan.x)/zoom-left).div(fit).coerceIn(0f,image.width.toFloat()),(((offset.y-pan.y)/zoom-top)/fit).coerceIn(0f,image.height.toFloat()))
                 Box(Modifier.fillMaxSize().testTag("pdf-page-$page").onSizeChanged {size=it}.transformable(transform,canPan={zoom>1f})
-                    .pointerInput(page,fit,zoom,pan,annotations) {
+                    .pointerInput(page,fit,top,zoom,pan,annotations) {
                         detectTapGestures(onTap={where->
                             val direction = when {
                                 where.x < size.width / 3f -> -1
@@ -173,7 +174,7 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                             }
                         })
                     }
-                    .pointerInput(page,fit,zoom,pan,document,native) {
+                    .pointerInput(page,fit,top,zoom,pan,document,native) {
                         var start=Offset.Zero;var end=Offset.Zero
                         detectDragGesturesAfterLongPress(onDragStart={start=it;end=it;selecting=start to end},onDragCancel={selecting=null},
                             onDragEnd={
@@ -197,16 +198,17 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
                             }) {change,_->change.consume();end=change.position;selecting=start to end}
                     }) {
                     Canvas(Modifier.fillMaxSize().graphicsLayer {scaleX=zoom;scaleY=zoom;translationX=pan.x;translationY=pan.y;transformOrigin=TransformOrigin(0f,0f)}) {
-                        drawImage(image.bitmap.asImageBitmap(),dstOffset=IntOffset(left.toInt(),0),dstSize=IntSize((image.width*fit).toInt(),(image.height*fit).toInt()))
+                        drawImage(image.bitmap.asImageBitmap(),dstOffset=IntOffset(left.toInt(),top.toInt()),dstSize=IntSize((image.width*fit).toInt(),(image.height*fit).toInt()))
+                        flashBoxes.filter {it.page==page}.forEach {b->drawRect(Color(0x55246BFC),Offset(left+b.left*image.width*fit,top+b.top*image.height*fit),androidx.compose.ui.geometry.Size((b.right-b.left)*image.width*fit,(b.bottom-b.top)*image.height*fit))}
                         val sorted=annotations.sortedBy {maxOf(it.updatedAt,it.createdAt)}
                         val layerPaint=android.graphics.Paint().apply {alpha=82}
                         val layer=drawContext.canvas.nativeCanvas.saveLayer(null,layerPaint)
                         sorted.filter {it.kind=="HIGHLIGHT"}.forEach {annotation->PdfLocators.decode(annotation.locator).filter {it.page==page}.forEach {b->
-                            drawRect(Color(android.graphics.Color.parseColor(MarkColor.normalize(annotation.color))),Offset(left+b.left*image.width*fit,b.top*image.height*fit),androidx.compose.ui.geometry.Size((b.right-b.left)*image.width*fit,(b.bottom-b.top)*image.height*fit))
+                            drawRect(Color(android.graphics.Color.parseColor(MarkColor.normalize(annotation.color))),Offset(left+b.left*image.width*fit,top+b.top*image.height*fit),androidx.compose.ui.geometry.Size((b.right-b.left)*image.width*fit,(b.bottom-b.top)*image.height*fit))
                         }}
                         drawContext.canvas.nativeCanvas.restoreToCount(layer)
                         sorted.filter {it.kind=="UNDERLINE" || it.kind=="NOTE"}.forEach {annotation->PdfLocators.decode(annotation.locator).filter {it.page==page}.forEach {b->
-                            drawLine(Color(android.graphics.Color.parseColor(MarkColor.normalize(annotation.color))),Offset(left+b.left*image.width*fit,b.bottom*image.height*fit),Offset(left+b.right*image.width*fit,b.bottom*image.height*fit),strokeWidth=2.dp.toPx(),pathEffect=if(annotation.kind=="NOTE") androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(5f,4f)) else null)
+                            drawLine(Color(android.graphics.Color.parseColor(MarkColor.normalize(annotation.color))),Offset(left+b.left*image.width*fit,top+b.bottom*image.height*fit),Offset(left+b.right*image.width*fit,top+b.bottom*image.height*fit),strokeWidth=2.dp.toPx(),pathEffect=if(annotation.kind=="NOTE") androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(5f,4f)) else null)
                         }}
 
                     }
