@@ -366,3 +366,10 @@ Debug / Preview 同 applicationId，安装会替换现有应用；普通版无�
 - 基础 PDF 仍显示加载状态，退出日志伴随 NativePdfSource 重复 close 的 Document already closed。资源 effect 调整为捕获组合时的稳定实例（与 key 一致），不在 effect 应用时重新读取已变化的 mutableState；NativePdfSource 在同一 Mutex 内幂等关闭，NonCancellable 保证 descriptor 释放，关闭后 render／select 提前拒绝。新增两项用自生成 PDF 的资源回归用例（重复／并发 close 和替换 source 独立性），等待设备实测。
 - 高级 PDF 0×0 仍偶发，宿主测量门禁不足。核实 beta01 PdfViewerFragment 上游：onLoadDocumentSuccess 在内部 PdfView 赋文档、从 GONE 切 VISIBLE 之前调用。改为在实际 PdfView 下一次正尺寸布局后，才向 Activity 发布 document；应用自有 loading container 保持可测量，被自有正文层覆盖，不改 AndroidX 的尺寸／裁边布局。回调检查 View 与 document 身份，避免旧回调跨重建写回。
 - 修改后本地 testDebugUnitTest／lintDebug／assembleDebug／assembleDebugAndroidTest 一次通过（1m 46s）；之前新 fixture 曾错误使用 Android PdfDocument.use 导致编译／Lint 分析失败，已改 try/finally 并重跑成功。进一步云端设备／R8／发布复验仍未完成。
+
+
+### 第四轮云端复验（b365fe8 / run 37581565194）
+
+- 64 项设备测试（含新增 2 项资源回归）：53 通过、1 失败、10 跳过；全部 PDF 用例、本轮资源回归、示例目录／搜索与转换权限闭环通过。该单轮通过不代表 PDF 全设备／长期压力已验收。
+- 唯一失败是 MaterialDesignInstrumentedTest 仍找旧标题「应用主题」，源码实际分为「深浅外观／强调色与壁纸」。更新到真实标题与实际滚动目标；同一用例的阅读模式切换也通过可滚动父容器定位。
+- JVM／Lint／交付脚本通过；失败仍阻止 package／publish，无新 Release。仅测试／记录修改不再递增功能版本，待完整套件与发布首轮真正通过。
