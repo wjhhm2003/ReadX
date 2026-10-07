@@ -339,3 +339,5 @@ Debug / Preview 同 applicationId，安装会替换现有应用；普通版无�
 - CI 明确 bundledOcr=false；全套 connectedDebugAndroidTest 仍为发布门禁。测试生成 QA 截图在模拟器退出前收集到报告，不上传用户样书。
 - 本地 assembleDebug／assembleDebugAndroidTest／lintDebug --offline --no-daemon 通过（7m）；交付脚本 7 项通过、actionlint 通过。本机专用 Pixel_6_API_36 启动后长期 offline，已停止本轮启动的两进程，未安装、清空、卸载或 wipe-data；未把编译成功称为设备测试通过。
 - 修正后的云端全套设备测试和后续签名／Release：待实际复验。
+
+- 检查固定提交的 emulator-runner src/main.ts 与 script-parser.ts，确认 script 输入按每行拆分，逐条 sh -c 执行；原 YAML 多行 Bash 函数／pipefail 与启动脚本不能直接运行。已改为单行 bash scripts/ci-device-tests.sh 和 bash scripts/ci-preview-smoke.sh。新增 4 项模拟 adb／Gradle 的 Bash 合约回归测试，连同原交付 7 项共 11 项本地通过，确认 Gradle 非零状态不会被收集截图掩盖，启动异常／crash 会阻止交付。

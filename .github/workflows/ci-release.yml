@@ -68,16 +68,7 @@ jobs:
           heap-size: 512M
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: |
-            set -euo pipefail
-            collect_qa() {
-              mkdir -p build/ci/device-qa
-              if adb shell test -d /sdcard/Android/data/io.readx.app/files/qa; then
-                adb pull /sdcard/Android/data/io.readx.app/files/qa build/ci/device-qa > build/ci/device-qa/pull.log 2>&1 || echo 'QA screenshot collection failed'
-              fi
-            }
-            trap collect_qa EXIT
-            ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest -PbundledOcr=false -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+          script: bash scripts/ci-device-tests.sh
       - name: Upload test and lint reports even after a failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -145,14 +136,7 @@ jobs:
           ram-size: 3072M
           heap-size: 512M
           disable-animations: true
-          script: |
-            set -euo pipefail
-            adb install -r build/ci/release/app-preview.apk
-            adb shell am start -W -n io.readx.app/.MainActivity | tee build/ci/reports/preview-launch.txt
-            grep -q '^Status: ok' build/ci/reports/preview-launch.txt
-            adb shell pidof io.readx.app
-            adb logcat -b crash -d > build/ci/reports/preview-crash.txt
-            if grep -q 'Process: io.readx.app' build/ci/reports/preview-crash.txt; then exit 1; fi
+          script: bash scripts/ci-preview-smoke.sh
       - name: Verify APK signatures and generate release manifest
         run: |
           signer="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner"
