@@ -50,7 +50,7 @@ class AsyncPaginationInstrumentedTest {
             entries["OPS/c$chapter.xhtml"] = "<html><head><link rel='stylesheet' href='book.css'/></head><body><h1>第${chapter + 1}章 精确验证</h1>$paragraphs<script>document.body.textContent='BAD SCRIPT'</script></body></html>"
         }
         ZipOutputStream(file.outputStream()).use { zip -> entries.forEach { (name, text) -> zip.putNextEntry(ZipEntry(name)); zip.write(text.toByteArray()); zip.closeEntry() } }
-        val book = runBlocking { app.repository.import(Uri.fromFile(file)) }
+        val book = runBlocking { app.repository.import(Uri.fromFile(file)).also { if(it.format=="TXT") app.repository.dao.saveTextEngine(it.id,"WEBVIEW") } }
         try {
             ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)).use { scenario ->
                 lateinit var model: LibraryViewModel
@@ -190,7 +190,8 @@ class AsyncPaginationInstrumentedTest {
             val web = WebView.getCurrentWebViewPackage()!!
             config = LayoutConfig(book.fingerprint, runBlocking { app.repository.dao.chapters(book.id) }.map { it.href }, view.width, view.height,
                 resources.displayMetrics.density, resources.configuration.fontScale, settings.fontSize, settings.lineHeight, settings.margin, settings.serif,
-                "${web.packageName}:${web.versionName}", android.os.Build.FINGERPRINT, resources.configuration.locales.toLanguageTags())
+                "${web.packageName}:${web.versionName}", android.os.Build.FINGERPRINT, resources.configuration.locales.toLanguageTags(), fontId=settings.fontId,
+                textScript=settings.textScript.name+"@"+ChineseText.VERSION)
         }
         val cache = PageIndexCache(app.cacheDir)
         var result: BookPageIndex? = null

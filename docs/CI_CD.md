@@ -14,6 +14,7 @@ main push（含 PR 合并）─→ verify → package（普通版 R8 Preview + �
 - 不按路径过滤，文档 push 也验证交付；main 每个 push 的运行不自动取消。同一 PR 新提交可取消其过时验证。
 - `workflow_dispatch` 可手动运行；只允许 main 的手动运行进入交付。
 - API 36 / google_apis / x86_64 / Pixel 6 是每个 job 新建的专用临时 AVD，绝不连接用户设备或上传私人验收样书。R8 与设备测试分阶段执行。
+- CI 显式 bundledOcr=false，仍运行全套 connectedDebugAndroidTest，失败不进入 package。测试用例只用自生成验收资源；退出模拟器前收集 QA 截图到 Actions 报告。
 - 普通构建跑现有全设备套件；私有样书、主动联网、未准备模型等可选用例按现有 Assume 条件跳过，不宣传为全部场景已验收。
 - 按用户要求只交付普通版，CI 始终 bundledOcr=false，不运行模型准备脚本，不下载／内置 OCR 模型，也不构建内置版。package 在新的专用 AVD 安装并启动实际 R8 Preview，检查启动状态、进程与 crash buffer；这不是完整 minified 设备套件。
 - 任一必需步骤失败都不发布；报告通过 `always()` 保留供排障。无 `continue-on-error`、Lint 基线或 destructive migration。

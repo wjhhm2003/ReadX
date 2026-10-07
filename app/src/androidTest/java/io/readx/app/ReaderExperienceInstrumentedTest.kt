@@ -59,23 +59,24 @@ class ReaderExperienceInstrumentedTest {
                 TestScreenshots.capture("epub-note-source")
                 tapLink(scenario, 35f)
                 waitReady(scenario) { it !== source && it.pageInfo().first > 3 }
-                compose.onNodeWithText("回到原处").assertIsDisplayed()
+                compose.showTextReaderControls()
+                compose.onNodeWithContentDescription("回到原处").assertIsDisplayed()
                 var targetPage = 0
                 scenario.onActivity { targetPage = findReader(it.window.decorView)!!.pageInfo().first }
                 // Bounded regression window: older delayed restores used to overwrite the fragment.
                 Thread.sleep(900)
                 scenario.onActivity { assertEquals(targetPage, findReader(it.window.decorView)!!.pageInfo().first) }
                 TestScreenshots.capture("epub-note-target")
-                compose.onNodeWithText("回到原处").performClick()
+                compose.onNodeWithContentDescription("回到原处").performClick()
                 waitReady(scenario) { it.pageInfo().first == 1 }
-                compose.onAllNodesWithText("回到原处").assertCountEquals(0)
+                compose.onAllNodesWithContentDescription("回到原处").assertCountEquals(0)
 
                 scenario.onActivity { source = findReader(it.window.decorView) }
                 tapLink(scenario, 93f)
                 waitReady(scenario) { it !== source && it.url.orEmpty().contains("notes.xhtml") && it.pageInfo().first > 3 }
                 Thread.sleep(900)
                 scenario.onActivity { assertTrue(findReader(it.window.decorView)!!.url.orEmpty().contains("notes.xhtml")); assertTrue(findReader(it.window.decorView)!!.pageInfo().first > 3) }
-                compose.onNodeWithText("回到原处").performClick()
+                compose.onNodeWithContentDescription("回到原处").performClick()
                 waitReady(scenario) { it.url.orEmpty().contains("chapter.xhtml") && it.pageInfo().first == 1 }
 
                 var total = 0
@@ -86,13 +87,13 @@ class ReaderExperienceInstrumentedTest {
                 waitReady(scenario) { it.url.orEmpty().contains("notes.xhtml") && it.pageInfo().first==it.pageInfo().second }
                 TestScreenshots.capture("reader-page-progress")
 
-                compose.onNodeWithContentDescription("排版").performClick()
+                compose.openFullReaderSettings()
                 compose.onNodeWithText("纯黑").performClick()
                 compose.onNodeWithText("完成").performClick()
                 waitReady(scenario)
                 scenario.onActivity { val reader = findReader(it.window.decorView)!!; assertEquals((reader.pageInfo().first - 1) * reader.width, reader.scrollX); assertFalse(WindowCompat.getInsetsController(it.window, it.window.decorView).isAppearanceLightNavigationBars) }
                 TestScreenshots.capture("epub-black-reading")
-                compose.onNodeWithContentDescription("排版").performClick()
+                compose.openFullReaderSettings()
                 compose.onNodeWithText("重置").performClick()
                 compose.onNodeWithText("重置阅读设置？").assertIsDisplayed()
                 compose.onAllNodesWithText("重置").onLast().performClick()

@@ -23,6 +23,7 @@ class PdfInstrumentedTest {
     @Test fun advancedPdfLoadsOpensSearchJumpsAndRestores() = withPdf { app, book ->
         ActivityScenario.launch<PdfActivity>(Intent(app, PdfActivity::class.java).putExtra("bookId", book.id)).use { scenario ->
             waitForPage(1)
+            compose.showPdfControls(scenario)
             TestScreenshots.capture("pdf-portrait")
             compose.onNodeWithContentDescription("跳转页码").performClick()
             compose.onNode(hasSetTextAction()).performTextInput("3")
@@ -33,6 +34,7 @@ class PdfInstrumentedTest {
             } }
             scenario.recreate()
             waitForPage(3)
+            compose.showPdfControls(scenario)
             compose.onNodeWithContentDescription("PDF 搜索").performClick()
             scenario.onActivity { activity ->
                 val viewer = activity.supportFragmentManager.findFragmentByTag("pdf") as io.readx.app.pdf.ReadXPdfFragment
@@ -43,38 +45,49 @@ class PdfInstrumentedTest {
             while (app.repository.dao.book(book.id)?.chapterIndex != 2) delay(50)
         } }
     }
-    @Test fun pdfViewportStartsBelowCompactToolbar() = withPdf(landscape = true) { app, book ->
+    @Test fun pdfViewportFillsSafeAreaAndControlsDoNotResizeIt() = withPdf(landscape = true) { app, book ->
         ActivityScenario.launch<PdfActivity>(Intent(app, PdfActivity::class.java).putExtra("bookId", book.id)).use { scenario ->
             waitForPage(1)
+            var hiddenHeight = 0
             scenario.onActivity { activity ->
-                val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
-                val linear = root.getChildAt(0) as android.widget.LinearLayout
-                val toolbar = linear.getChildAt(0)
-                val viewer = linear.getChildAt(1)
-                val density = activity.resources.displayMetrics.density
-                org.junit.Assert.assertTrue("Toolbar must be compact", toolbar.height <= 57 * density)
-                org.junit.Assert.assertEquals(toolbar.bottom, viewer.top)
-                org.junit.Assert.assertTrue("PDF must use most of the window", viewer.height > linear.height * .7f)
+                val content = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
+                val frame = content.getChildAt(0) as android.widget.FrameLayout
+                val viewer = (0 until frame.childCount).map(frame::getChildAt)
+                    .filterIsInstance<androidx.fragment.app.FragmentContainerView>().single()
+                hiddenHeight = viewer.height
+                org.junit.Assert.assertEquals("Only system safe area may precede the PDF", frame.paddingTop, viewer.top)
+                org.junit.Assert.assertEquals(frame.height - frame.paddingTop - frame.paddingBottom, viewer.height)
             }
-            Thread.sleep(500)
+            compose.showPdfControls(scenario)
+            scenario.onActivity { activity ->
+                val frame = (activity.findViewById<android.view.ViewGroup>(android.R.id.content)).getChildAt(0) as android.widget.FrameLayout
+                val viewer = (0 until frame.childCount).map(frame::getChildAt)
+                    .filterIsInstance<androidx.fragment.app.FragmentContainerView>().single()
+                org.junit.Assert.assertEquals("Showing controls must not shrink the PDF", hiddenHeight, viewer.height)
+            }
             TestScreenshots.capture("pdf-landscape-page")
         }
     }
     @Test fun basicPdfRendersAndTurnsPages() = withPdf { app, book ->
+        val preferences = io.readx.app.ui.ReaderPreferences(app)
+        preferences.update(preferences.settings.value.copy(pdfLayout=io.readx.app.ui.PdfReadingLayout.HORIZONTAL))
         val intent = Intent(app, PdfActivity::class.java).putExtra("bookId", book.id).putExtra("forceBasicForTest", true)
         ActivityScenario.launch<PdfActivity>(intent).use {
             waitForPage(1)
             compose.waitUntil(15000) {compose.onAllNodesWithTag("pdf-page-0").fetchSemanticsNodes().isNotEmpty()}
             compose.onNodeWithTag("pdf-page-0").performTouchInput { swipeLeft() }
             waitForPage(2)
-            compose.onNodeWithText("左右滑页 · 双指缩放 · 长按拖动选字或区域批注（扫描件无 OCR）").assertIsDisplayed()
+            compose.onNodeWithTag("pdf-page-1").assertIsDisplayed()
         }
     }
     private fun waitForPage(number: Int) {
-        compose.waitUntil(30000) { compose.onAllNodesWithText("第${number}/3页").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(30000) { compose.onAllNodesWithText("$number / 3").fetchSemanticsNodes().isNotEmpty() }
     }
     private fun withPdf(landscape: Boolean = false, block: (ReadXApplication, Book) -> Unit) {
         val app = ApplicationProvider.getApplicationContext<ReadXApplication>()
+        val preferences = io.readx.app.ui.ReaderPreferences(app)
+        val oldSettings = preferences.settings.value
+        preferences.update(io.readx.app.ui.ReaderSettings())
         val file = File.createTempFile("readx-pdf-test-", ".pdf", app.cacheDir)
         val document = PdfDocument()
         try {
@@ -88,6 +101,6 @@ class PdfInstrumentedTest {
         } finally { document.close() }
         val book = runBlocking { app.repository.import(Uri.fromFile(file)) }
         try { block(app, book) }
-        finally { runBlocking { app.repository.delete(book) }; file.delete() }
+        finally { runBlocking { app.repository.delete(book) }; file.delete(); preferences.update(oldSettings) }
     }
 }

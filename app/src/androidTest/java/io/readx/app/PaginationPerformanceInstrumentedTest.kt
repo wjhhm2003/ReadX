@@ -50,7 +50,8 @@ class PaginationPerformanceInstrumentedTest {
                     (1..6).forEach { chapter -> entries["OPS/c$chapter.xhtml"] = "<html><body><h1>第${chapter}章 性能测试</h1>" + paragraphs.joinToString("") { "<p>$it</p>" } + "</body></html>" }
                     entries.forEach { (name, text) -> zip.putNextEntry(ZipEntry(name)); zip.write(text.toByteArray()); zip.closeEntry() }
                 }
-                val book = runBlocking { app.repository.import(Uri.fromFile(file)) }
+                // This suite measures WebView; NativeTxtInstrumentedTest covers the default native engine.
+        val book = runBlocking { app.repository.import(Uri.fromFile(file)).also { if(it.format=="TXT") app.repository.dao.saveTextEngine(it.id,"WEBVIEW") } }
                 try {
                     ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)).use { scenario ->
                         lateinit var model: LibraryViewModel
@@ -69,6 +70,7 @@ class PaginationPerformanceInstrumentedTest {
                                 readyMs > 0
                             }
                             assertTrue(count > 1)
+                            compose.showTextReaderControls()
                             compose.waitUntil(30000) { compose.onAllNodes(SemanticsMatcher("exact page total") { node -> node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.any { it.text.matches(Regex("[0-9]+ / [0-9]+")) } == true }).fetchSemanticsNodes().isNotEmpty() }
                             val totalMs = SystemClock.elapsedRealtime() - start
                             metrics += "$format attempt=$attempt ready_ms=$readyMs total_ms=$totalMs chapter_pages=$count"

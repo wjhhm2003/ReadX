@@ -327,3 +327,15 @@ Debug / Preview 同 applicationId，安装会替换现有应用；普通版无�
 - 本地 Gradle --offline --no-daemon testDebugUnitTest lintDebug assembleDebug assemblePreview（ciVersionCode=100001、ciVersionSuffix=-ci.1.1）：通过，耗时 8m 3s；55 项 JVM 测试，无失败／错误／跳过；Lint 0 错误、63 警告。普通版 R8 Preview 从真实 AGP metadata 暂存成功、apksigner 验证通过，ZIP 检查没有 .traineddata 模型。此本机包仍使用本机调试签名，不冒充 CI 签名产物。
 - 本机 adb devices 无在线设备，未启动／安装／清理本机设备；API 36 设备验证交由专用 CI AVD。云端设备测试与真实 Release 尚待实际运行结果，不视为已通过。
 - 一次性 CI 专用签名密钥的自动创建／上传操作被执行安全策略拦截；未上传本机密钥，未将密钥写入仓库。管理员需按 `docs/CI_CD.md` 手动设置 Secret；缺失时 package 明确失败，不发布不可持续更新的随机签名包。
+
+
+## 2026-10-07：首轮 CI 设备套件失败与修正
+
+- 核实手动运行 37564691119（源码 4cc9af8）：JVM／Lint／设备测试 APK 编译通过；专用 API 36 AVD 实际执行 62 项，18 失败、10 跳过、34 通过，发布 job 按门禁跳过，未产生新 Release。完整日志／XML／每用例 logcat 已下载到忽略的 .research/ci-37564691119，不提交诊断或书籍内容。
+- READX_CI_PREVIEW_KEYSTORE_BASE64 Secret 已由用户设置（只查询名称，不读取／输出值）。本次失败不是缺 Secret；私钥正确性还需后续签名步骤验证。
+- 更新旧 WebView 专属 TXT 验收样书，按书显式选 WEBVIEW；原生默认引擎继续由 NativeTxtInstrumentedTest 验收。分页缓存预期补 fontId 与 textScript／字典版本，不使用过期键等待不存在的缓存。
+- 更新沉浸式正文／PDF 控件的真实点击路径、全部设置、目录搜索与书签弹层，使用当前 content description／页码；PDF 按覆盖式布局和居中偏移验收，不强迫生产界面恢复常驻工具栏或旧文案。
+- 无 OCR 模型时，图形页转换验证 WAITING_MODEL、无结果书／无正文写入，而非读取不存在的 qa-models；有模型时仍验收正文失败。未下载模型、未内置模型、未增加跳过或忽略失败。
+- CI 明确 bundledOcr=false；全套 connectedDebugAndroidTest 仍为发布门禁。测试生成 QA 截图在模拟器退出前收集到报告，不上传用户样书。
+- 本地 assembleDebug／assembleDebugAndroidTest／lintDebug --offline --no-daemon 通过（7m）；交付脚本 7 项通过、actionlint 通过。本机专用 Pixel_6_API_36 启动后长期 offline，已停止本轮启动的两进程，未安装、清空、卸载或 wipe-data；未把编译成功称为设备测试通过。
+- 修正后的云端全套设备测试和后续签名／Release：待实际复验。

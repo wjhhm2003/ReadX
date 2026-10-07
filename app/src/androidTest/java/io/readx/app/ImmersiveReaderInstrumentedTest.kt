@@ -61,7 +61,8 @@ class ImmersiveReaderInstrumentedTest {
                 val up=MotionEvent.obtain(now,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0);instrumentation.sendPointerSync(up);up.recycle()
                 compose.waitUntil(8000) {compose.onAllNodesWithTag("selection-menu").fetchSemanticsNodes().isNotEmpty()}
                 TestScreenshots.capture("reader-031-selection")
-                compose.onNodeWithTag("mark-color-#75BEFF").performClick();compose.onNodeWithText("荧光笔").performClick()
+                compose.onNodeWithContentDescription("颜色与选区设置").performClick()
+                compose.onNodeWithTag("mark-color-#75BEFF").performClick();compose.onNodeWithContentDescription("高亮").performClick()
                 compose.waitUntil(8000) {runBlocking {app.repository.dao.annotations(book.id).any {it.kind=="HIGHLIGHT" && it.color=="#75BEFF"}}}
                 val mark=runBlocking {app.repository.dao.annotations(book.id).single {it.kind=="HIGHLIGHT"}}
                 runBlocking {app.repository.dao.upsertAnnotation(mark.copy(id="repeat-test"))};assertEquals(1,runBlocking {app.repository.dao.annotations(book.id).count {it.kind=="HIGHLIGHT"}})
@@ -77,7 +78,7 @@ class ImmersiveReaderInstrumentedTest {
                 }}
                 compose.waitUntil(5000) {bx>0 && by>0}
                 val stamp=SystemClock.uptimeMillis();for(action in listOf(MotionEvent.ACTION_DOWN,MotionEvent.ACTION_UP)) {val event=MotionEvent.obtain(stamp,SystemClock.uptimeMillis(),action,bx,by,0);instrumentation.sendPointerSync(event);event.recycle()}
-                compose.waitUntil(8000) {compose.onAllNodesWithText("取消标记").fetchSemanticsNodes().isNotEmpty()};compose.onNodeWithText("取消标记").performClick()
+                compose.waitUntil(8000) {compose.onAllNodesWithContentDescription("取消标记").fetchSemanticsNodes().isNotEmpty()};compose.onNodeWithContentDescription("取消标记").performClick()
                 compose.waitUntil(8000) {runBlocking {app.repository.dao.annotations(book.id).none {it.kind=="HIGHLIGHT"}}}
                 if(compose.onAllNodesWithContentDescription("返回书架").fetchSemanticsNodes().isEmpty()) {
                     compose.onNodeWithTag("reader-content").performTouchInput {click(center)}

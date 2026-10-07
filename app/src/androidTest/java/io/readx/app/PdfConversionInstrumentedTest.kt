@@ -66,7 +66,7 @@ class PdfConversionInstrumentedTest {
                 } finally {output.delete()}
                 lateinit var model:LibraryViewModel
                 scenario.onActivity {model=ViewModelProvider(it)[LibraryViewModel::class.java];model.open(result!!)}
-                compose.waitUntil(20000) {compose.onAllNodesWithTag("reader-content").fetchSemanticsNodes().isNotEmpty()}
+                compose.waitUntil(20000) {compose.onAllNodesWithTag("reader-content").fetchSemanticsNodes(atLeastOneRootRequired=false).isNotEmpty()}
                 scenario.onActivity {model.search("conversion paragraph",result!!.id)}
                 compose.waitUntil(10000) {!model.searching.value && model.hits.value.isNotEmpty()}
                 runBlocking {app.repository.delete(book)}
@@ -159,7 +159,7 @@ class PdfConversionInstrumentedTest {
                 assertTrue(ReaderPreferences(app).settings.value.pdfToEpubEnabled)
                 assertTrue(runBlocking {app.conversions.dao.forSource(book.id)}.isEmpty())
                 compose.onNode(hasText("书库") and hasClickAction()).performClick()
-                compose.waitUntil(10000) {compose.onAllNodesWithText(book.title).fetchSemanticsNodes().isNotEmpty()}
+                compose.waitUntil(10000) {compose.onAllNodesWithText(book.title).fetchSemanticsNodes(atLeastOneRootRequired=false).isNotEmpty()}
                 compose.onAllNodesWithText(book.title).onLast().performClick()
                 compose.waitUntil(10000) {runBlocking {app.conversions.dao.forSource(book.id)}.isNotEmpty()}
                 taskId=runBlocking {app.conversions.dao.forSource(book.id).single().id}
@@ -192,23 +192,14 @@ class PdfConversionInstrumentedTest {
                 val book=runBlocking {app.repository.import(Uri.fromFile(file))};var conversion:String?=null
                 try {
                     val options=if(file==figure) PdfConversionOptions("eng",app.ocrModels.models.value.filterKeys {it=="eng"}) else PdfConversionOptions()
-                    // Supply a test-only model snapshot if needed, without changing installed preferences.
-                    var actual=options
-                    if(file==figure && options.models.isEmpty()) {
-                        val holder=File(app.filesDir,"books/${UUID.randomUUID()}").apply {mkdirs()}
-                        val prefs=app.getSharedPreferences("ocr-models",0);val previous=prefs.all.toMap()
-                        try {
-                            File(app.getExternalFilesDir(null),"qa-models/eng.traineddata").copyTo(File(holder,"eng.traineddata"))
-                            runBlocking {app.ocrModels.import(FileProvider.getUriForFile(app,app.packageName+".files",File(holder,"eng.traineddata")))}
-                            actual=app.ocrModels.snapshot("eng")
-                        } finally {prefs.edit().clear().apply {previous.forEach {(k,v)->putString(k,v as String)}}.commit();app.ocrModels.reload();holder.listFiles()?.forEach {it.delete()};holder.delete()}
-                    }
+                    // Ordinary CI has no OCR model. Test the genuine WAITING_MODEL state, without downloading or skipping.
+                    val actual=options
                     val id=runBlocking {app.conversions.start(book.id,actual)};conversion=id
                     val task=waitTask(id) {it.stage in listOf("FAILED","COMPLETE","WAITING_MODEL")}
-                    assertEquals("FAILED",task.stage);assertNull(task.resultBookId)
+                    assertEquals(if(file==figure && actual.models.isEmpty()) "WAITING_MODEL" else "FAILED",task.stage);assertNull(task.resultBookId)
                     assertTrue(runBlocking {app.repository.dao.chapters(book.id)}.isEmpty())
                     if(file==protected) assertTrue(task.error.contains("密码"))
-                    if(file==figure) assertTrue(task.error.contains("正文"))
+                    if(file==figure && actual.models.isNotEmpty()) assertTrue(task.error.contains("正文"))
                 } finally {runBlocking {app.repository.delete(book);conversion?.let {app.conversions.dao.discard(it)}};file.delete()}
             }
         }

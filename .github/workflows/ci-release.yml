@@ -52,7 +52,7 @@ jobs:
         run: |
           chmod +x gradlew
           python3 -m unittest discover -s scripts/tests -v
-          ./gradlew --no-daemon --stacktrace testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+          ./gradlew --no-daemon --stacktrace testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest -PbundledOcr=false
       - name: Enable KVM on the disposable CI runner
         run: |
           sudo chown "$USER" /dev/kvm
@@ -68,13 +68,23 @@ jobs:
           heap-size: 512M
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+          script: |
+            set -euo pipefail
+            collect_qa() {
+              mkdir -p build/ci/device-qa
+              if adb shell test -d /sdcard/Android/data/io.readx.app/files/qa; then
+                adb pull /sdcard/Android/data/io.readx.app/files/qa build/ci/device-qa > build/ci/device-qa/pull.log 2>&1 || echo 'QA screenshot collection failed'
+              fi
+            }
+            trap collect_qa EXIT
+            ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest -PbundledOcr=false -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
       - name: Upload test and lint reports even after a failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            build/ci/device-qa/
             app/build/reports/
             app/build/test-results/
             app/build/outputs/androidTest-results/

@@ -28,9 +28,9 @@ class PaginationInstrumentedTest {
 
     private fun exercise(format: String) {
         val app = ApplicationProvider.getApplicationContext<ReadXApplication>()
-        val prefs = app.getSharedPreferences("reader-settings", 0)
-        val oldLayout = prefs.getString("layout", null)
-        prefs.edit().putString("layout", "PAGED").commit()
+        val preferences = io.readx.app.ui.ReaderPreferences(app)
+        val oldSettings = preferences.settings.value
+        preferences.update(io.readx.app.ui.ReaderSettings())
         val title = "分页验收 " + format.uppercase()
         val text = (1..100).joinToString("\n\n") { "第 ${it} 段。真正的分页应该按屏幕排版，而不是一章只显示一页。改变字号会重新排版，滑动和按钮都可以逐页阅读。保持正文顺序，最后一段也不能丢失。" }
         val file = File(app.cacheDir, "$title.$format")
@@ -43,7 +43,8 @@ class PaginationInstrumentedTest {
             )
             ZipOutputStream(file.outputStream()).use { zip -> entries.forEach { (name, content) -> zip.putNextEntry(ZipEntry(name)); zip.write(content.toByteArray()); zip.closeEntry() } }
         }
-        val book = runBlocking { app.repository.import(Uri.fromFile(file)) }
+        // This suite measures WebView; NativeTxtInstrumentedTest covers the default native engine.
+        val book = runBlocking { app.repository.import(Uri.fromFile(file)).also { if(it.format=="TXT") app.repository.dao.saveTextEngine(it.id,"WEBVIEW") } }
         try {
             ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)).use { scenario ->
                 compose.waitUntil(15000) { compose.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty() }
@@ -69,30 +70,33 @@ class PaginationInstrumentedTest {
                 scenario.onActivity { val r = findReader(it.window.decorView)!!; assertEquals((r.pageInfo().first - 1) * r.width, r.scrollX) }
                 TestScreenshots.capture("$format-paged")
 
+                compose.showTextReaderControls()
                 compose.onNodeWithContentDescription("返回书架").performClick()
                 runBlocking { withTimeout(5000) { while ((app.repository.dao.book(book.id)?.scrollFraction ?: 0f) == 0f) delay(30) } }
                 compose.onAllNodesWithText(title).onLast().performClick()
                 compose.waitUntil(15000) { var page = 0; scenario.onActivity { page = findReader(it.window.decorView)?.takeUnless { it.restoring }?.pageInfo()?.first ?: 0 }; page == 3 }
-                compose.onNodeWithContentDescription("排版").performClick()
-                compose.onNodeWithText("滚动", useUnmergedTree = true).performClick()
+                compose.openFullReaderSettings()
+                compose.onNodeWithText("滚动", useUnmergedTree = true).performScrollTo().performClick()
                 compose.onNodeWithText("完成").performClick()
                 compose.waitUntil(15000) { var scroll = false; scenario.onActivity { scroll = findReader(it.window.decorView)?.let { !it.paged && !it.restoring } ?: false }; scroll }
                 scenario.onActivity { val reader = findReader(it.window.decorView)!!; reader.scrollBy(0, reader.height / 2); assertTrue(reader.scrollY > 0) }
                 TestScreenshots.capture("$format-scroll")
-                compose.onNodeWithContentDescription("排版").performClick()
-                compose.onNodeWithText("分页", useUnmergedTree = true).performClick()
+                compose.openFullReaderSettings()
+                compose.onNodeWithText("分页", useUnmergedTree = true).performScrollTo().performClick()
                 compose.onNodeWithText("完成").performClick()
                 compose.waitUntil(15000) { var ready = false; scenario.onActivity { ready = findReader(it.window.decorView)?.let { it.paged && !it.restoring && it.pageInfo().second > 3 } ?: false }; ready }
                 scenario.onActivity { findReader(it.window.decorView)!!.restore(1f) }
+                compose.waitUntil(10000) { var end=false;scenario.onActivity { end=findReader(it.window.decorView)?.let { !it.restoring && it.pageInfo().first==it.pageInfo().second }==true };end }
                 tap(scenario,.85f)
-                compose.waitUntil(5000) { compose.onAllNodesWithText("第二章 章末测试").fetchSemanticsNodes().isNotEmpty() }
-                compose.onAllNodesWithText("第二章 章末测试").onFirst().assertIsDisplayed()
+                compose.waitUntil(10000) { var next=false;scenario.onActivity { next=findReader(it.window.decorView)?.url.orEmpty().contains(if(format=="epub") "next.xhtml" else "chapter-1") };next }
                 compose.waitUntil(15000) { var ready = false; scenario.onActivity { ready = findReader(it.window.decorView)?.let { !it.restoring } ?: false }; ready }
                 tap(scenario,.15f)
-                compose.waitUntil(5000) { compose.onAllNodesWithText("第一章 分页测试").fetchSemanticsNodes().isNotEmpty() }
-                compose.onAllNodesWithText("第一章 分页测试").onFirst().assertIsDisplayed()
+                compose.waitUntil(10000) { var first=false;scenario.onActivity { first=findReader(it.window.decorView)?.url.orEmpty().contains(if(format=="epub") "chapter.xhtml" else "chapter-0") };first }
                 compose.waitUntil(15000) { var end = false; scenario.onActivity { end = findReader(it.window.decorView)?.let { !it.restoring && it.pageInfo().first == it.pageInfo().second && it.pageInfo().second > 3 } ?: false }; end }
+                compose.showTextReaderControls()
+                compose.onNodeWithContentDescription("批注").performClick()
                 compose.onNodeWithContentDescription("添加位置书签").performClick()
+                compose.onNodeWithText("完成").performClick()
                 compose.onNodeWithContentDescription("返回书架").performClick()
                 compose.onNode(hasText("批注") and hasClickAction()).performClick()
                 compose.waitUntil(5000) { compose.onAllNodesWithText("第一章 分页测试").fetchSemanticsNodes().isNotEmpty() }
@@ -101,7 +105,7 @@ class PaginationInstrumentedTest {
             }
         } finally {
             runBlocking { app.repository.delete(book) }; file.delete()
-            prefs.edit().apply { if (oldLayout == null) remove("layout") else putString("layout", oldLayout) }.commit()
+            preferences.update(oldSettings)
         }
     }
     private fun tap(scenario: ActivityScenario<MainActivity>, part: Float) {

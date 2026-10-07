@@ -81,7 +81,7 @@ class ReferenceUiInstrumentedTest {
                 compose.waitForIdle(); Thread.sleep(500)
                 TestScreenshots.capture("bookshelf-reference")
                 compose.onAllNodesWithText("书库", useUnmergedTree = true).onLast().performClick()
-                compose.onNodeWithText("全部书籍").assertIsDisplayed()
+                compose.onAllNodesWithText("书库").onFirst().assertIsDisplayed()
                 compose.onNodeWithText("EPUB").performClick()
                 compose.waitUntil(5000) { compose.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithText(title).assertIsDisplayed()

@@ -38,17 +38,21 @@ class PdfAnnotationInstrumentedTest {
         file.outputStream().use {pdf.writeTo(it)};pdf.close()
         val book=runBlocking {app.repository.import(Uri.fromFile(file))}
         try {
-            ActivityScenario.launch<PdfActivity>(Intent(app,PdfActivity::class.java).putExtra("bookId",book.id)).use {
-                compose.waitUntil(30000) {compose.onAllNodesWithText("第1/3页").fetchSemanticsNodes().isNotEmpty()}
+            ActivityScenario.launch<PdfActivity>(Intent(app,PdfActivity::class.java).putExtra("bookId",book.id)).use { scenario ->
+                compose.waitUntil(30000) {compose.onAllNodesWithText("1 / 3").fetchSemanticsNodes().isNotEmpty()}
                 compose.waitUntil(15000) {compose.onAllNodesWithTag("pdf-page-0").fetchSemanticsNodes().isNotEmpty()}
                 compose.onNodeWithTag("pdf-page-0").performTouchInput {swipeLeft()}
-                compose.waitUntil(10000) {compose.onAllNodesWithText("第2/3页").fetchSemanticsNodes().isNotEmpty()}
+                compose.waitUntil(10000) {compose.onAllNodesWithText("2 / 3").fetchSemanticsNodes().isNotEmpty()}
                 compose.waitUntil(15000) {compose.onAllNodesWithTag("pdf-page-1").fetchSemanticsNodes().isNotEmpty()}
                 compose.onNodeWithTag("pdf-page-1").performTouchInput {
-                    down(Offset(width*.1f,height*.14f));advanceEventTime(700);moveTo(Offset(width*.65f,height*.16f),500);up()
+                    // Include the actual centered page offset when reaching the generated text.
+                    val scale=minOf(width/595f,height/842f)
+                    val left=(width-595f*scale)/2f;val top=(height-842f*scale)/2f
+                    down(Offset(left+70f*scale,top+155f*scale));advanceEventTime(700)
+                    moveTo(Offset(left+400f*scale,top+155f*scale),500);up()
                 }
-                compose.waitUntil(10000) {compose.onAllNodesWithText("荧光笔").fetchSemanticsNodes().isNotEmpty()}
-                compose.onNodeWithText("写批注").performClick()
+                compose.waitUntil(10000) {compose.onAllNodesWithContentDescription("高亮").fetchSemanticsNodes().isNotEmpty()}
+                compose.onNodeWithContentDescription("写笔记").performClick()
                 compose.onNode(hasSetTextAction()).performTextInput("离线 PDF 笔记")
                 compose.onNodeWithText("保存").performClick()
                 compose.waitUntil(8000) {runBlocking {app.repository.dao.annotations(book.id).any {it.note=="离线 PDF 笔记"}}}
@@ -56,6 +60,7 @@ class PdfAnnotationInstrumentedTest {
                 assertEquals(1,annotation.chapter);assertTrue("Text PDF should provide a real selected quote",annotation.quote.isNotBlank());assertTrue(annotation.locator.contains("rects"))
                 compose.waitForIdle()
                 TestScreenshots.capture("pdf-030-horizontal-annotation")
+                compose.showPdfControls(scenario)
                 compose.onNodeWithContentDescription("切换 PDF 横向或纵向阅读").performClick()
                 compose.waitUntil(10000) {compose.onAllNodesWithContentDescription("PDF 搜索").fetchSemanticsNodes().isNotEmpty()}
                 TestScreenshots.capture("pdf-030-vertical-annotation")

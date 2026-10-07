@@ -44,7 +44,8 @@ class ReaderNavigationInstrumentedTest {
                 "OPS/b.xhtml" to "<html><body><h1>第二章 全书进度</h1>"+text.split("\n\n").joinToString("") {"<p>$it</p>"}+"</body></html>")
             ZipOutputStream(file.outputStream()).use {zip->entries.forEach {(name,value)->zip.putNextEntry(ZipEntry(name));zip.write(value.toByteArray());zip.closeEntry()}}
         }
-        val book=runBlocking {app.repository.import(Uri.fromFile(file))}
+        // This suite measures WebView; NativeTxtInstrumentedTest covers the default native engine.
+        val book = runBlocking { app.repository.import(Uri.fromFile(file)).also { if(it.format=="TXT") app.repository.dao.saveTextEngine(it.id,"WEBVIEW") } }
         try {
             ActivityScenario.launch<MainActivity>(Intent(app,MainActivity::class.java)).use {scenario->
                 compose.waitUntil(15000) {compose.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()}
@@ -76,8 +77,8 @@ class ReaderNavigationInstrumentedTest {
 
                 val up=android.view.MotionEvent.obtain(now,android.os.SystemClock.uptimeMillis(),android.view.MotionEvent.ACTION_UP,x,y,0)
                 instrumentation.sendPointerSync(up);up.recycle()
-                compose.waitUntil(8000) {compose.onAllNodesWithText("荧光笔").fetchSemanticsNodes().isNotEmpty()}
-                compose.onNodeWithText("荧光笔").performClick()
+                compose.waitUntil(8000) {compose.onAllNodesWithContentDescription("高亮").fetchSemanticsNodes().isNotEmpty()}
+                compose.onNodeWithContentDescription("高亮").performClick()
                 compose.waitUntil(8000) {runBlocking {app.repository.dao.annotations(book.id).any {it.kind=="HIGHLIGHT"}}}
                 var markCount=0
                 compose.waitUntil(8000) {scenario.onActivity {findReader(it.window.decorView)?.trusted("document.querySelectorAll('[data-readx-mark]').length") {value->markCount=value.toIntOrNull()?:0}};markCount>0}

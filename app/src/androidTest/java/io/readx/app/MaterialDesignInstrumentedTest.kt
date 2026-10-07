@@ -54,7 +54,8 @@ class MaterialDesignInstrumentedTest {
         val prefs = ReaderPreferences(app); val old = prefs.settings.value
         val file = File(app.cacheDir, "md3-${UUID.randomUUID()}.txt")
         file.writeText("第一章 设计验收\n" + (1..80).joinToString("\n") { "第 $it 段。此文本仅用于界面验收，不是真实用户书籍。" })
-        val book = runBlocking { app.repository.import(Uri.fromFile(file)) }
+        // This suite measures WebView; NativeTxtInstrumentedTest covers the default native engine.
+        val book = runBlocking { app.repository.import(Uri.fromFile(file)).also { if(it.format=="TXT") app.repository.dao.saveTextEngine(it.id,"WEBVIEW") } }
         val title = "设计语言验收样书"
         val extraBooks = mutableListOf<Book>()
         try {
@@ -90,6 +91,8 @@ class MaterialDesignInstrumentedTest {
                 assertGestureColor(accentScheme(ThemeAccent.BLUE, "", false).surfaceContainer.toArgb())
                 tab("书库")
                 compose.onAllNodesWithText("书库").onFirst().assertIsDisplayed()
+                // Recent reads intentionally stay visible independently of format filtering.
+                compose.onNodeWithContentDescription("折叠或展开最近在读").performClick()
                 compose.onNodeWithText("PDF").performClick()
                 compose.onAllNodesWithText(title).assertCountEquals(0)
                 compose.onNodeWithText("全部").performClick()
