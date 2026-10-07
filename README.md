@@ -40,15 +40,14 @@ ReadX 是个人自用的本地轻量 Android 阅读器，旨在提供纯粹、�
 
 ### 1. 下载与版本选择
 
-ReadX 提供两种 Preview APK 供选择（均使用包名 `io.readx.app`，安装会互相更新替换）：
+自动交付只提供不内置 OCR 模型的普通版 Preview APK（包名 `io.readx.app`）：
 
 | 预览包 | OCR 模型 | 适用情况 |
 | --- | --- | --- |
 | **普通版** `app-preview.apk` | 不内置；支持从本地导入 `.traineddata` 或在线下载 | 安装包体积小，按需准备模型 |
-| **内置版** `app-ocr-preview.apk` | 内置简中（`chi_sim`）、繁中（`chi_tra`）、英文（`eng`）模型 | 安装后离线即可使用完整 OCR 功能 |
 
 > [!NOTE]
-> 个人 Preview APK 使用调试密钥签名。安装新版本或在不同来源的构建间切换时，请先通过应用导出需要保留的原书与转换文件，**切勿通过卸载或清空应用数据来解决签名冲突**。
+> 个人 Preview APK 使用本机调试密钥，自动交付包使用独立 CI 调试密钥，二者不能直接覆盖安装。安装新版本或在不同来源的构建间切换时，请先通过应用导出需要保留的原书与转换文件，**切勿通过卸载或清空应用数据来解决签名冲突**。
 
 ### 2. 基础使用指南
 
@@ -107,10 +106,16 @@ ReadX 提供两种 Preview APK 供选择（均使用包名 `io.readx.app`，安�
 
 产物路径：`app/build/outputs/apk/preview/app-preview.apk`。
 
-#### CI/CD 自动构建 (GitHub Actions)
-本项目已配置 GitHub Actions 自动构建工作流（位于 `.github/workflows/build.yml`）：
-- **触发时机**：当代码被 `push` 或提交 `pull_request` 到 `main` / `master` 分支时，后台会自动运行单元测试并编译 APK。
-- **获取 APK**：构建完成后，可在 GitHub 仓库页面的 **Actions** 标签页中找到对应的 Workflow 运行记录，在页面的 **Artifacts** 区域下载生成的 `ReadX-APKs` 压缩包（内含 `app-debug.apk` 及 `app-preview.apk`）。
+#### CI/CD 自动测试与交付 (GitHub Actions)
+工作流位于 [`.github/workflows/ci-release.yml`](.github/workflows/ci-release.yml)，配置与一次性签名准备见 [CI/CD 说明](docs/CI_CD.md)。
+
+- **PR → `main`**：自动跑交付脚本测试、JVM 单元测试、Lint 和专用 API 36 模拟器设备测试；不读取签名 Secret、不发布。
+- **每次 `main` push（含 PR 合并）**：同样验证，再构建不内置 OCR 模型的普通版 R8 Preview，校验固定字典、实际压缩 APK 安装启动和签名；全部成功才发布到 [Releases](https://github.com/wjhhm2003/ReadX/releases)。合并使用其产生的 push 事件，避免重复交付。
+- **每次独立预发布**：标签 `ci-v<版本>-<运行号>.<重跑号>-<提交短哈希>`；附件为 `app-preview.apk`、`SHA256SUMS.txt`、`build-info.json` 和发布说明。测试报告、证书验证／启动报告、R8 mapping 保存在 Actions 附件中 14 天。
+- **签名与安装**：需一次性设置 `READX_CI_PREVIEW_KEYSTORE_BASE64` Secret，使用独立、持久化的 CI Preview 调试密钥；本机签名不上传。CI `versionCode = 100000 + workflow run_number`，普通版可在同一 CI 签名下更新。CI 包与本机旧包签名不同，不能直接覆盖；不要卸载或清空数据规避冲突。
+- **仅普通版**：CI 显式使用 `bundledOcr=false`，不运行 OCR 模型准备脚本，不下载／内置模型，不生成或发布内置模型 APK。现有可选 OCR 功能与本地构建能力不因此删除。
+- **失败不交付**：不跳过失败测试、不依赖旧 APK；PR 不暴露签名或发布权限。私人样书、显式联网、需外部模型等可选测试可能跳过，API 36 验证不代表所有设备和复杂书籍已经验收。
+- 支持在 Actions 中对 `main` 手动运行；非 `main` 手动运行只验证。每次 `main` push 都保留，只有同一 PR 的过时运行会被取消。自动发布都是开发预览，不覆盖正式发行的 Latest。
 
 #### 设备测试
 ```powershell

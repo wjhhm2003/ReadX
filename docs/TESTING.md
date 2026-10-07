@@ -317,3 +317,13 @@ Debug / Preview 同 applicationId，安装会替换现有应用；普通版无�
 | `E:/ReadX/app/build/outputs/apk/preview/app-preview.apk` | 41687421 | `D1FD5A85FDA3590B30313CB6DDAED3EE56C1E8A1FA0C445F0B298299B090517F` |
 
 已读取 Preview 包元数据确认 `io.readx.app` / versionCode 16 / `0.7.4-preview` / min 28 / target 36；这不是设备安装或阅读验收。繁简字典已内置，不需 OCR 模型；普通版仍不内置 OCR 模型。
+
+
+## 2026-10-07：CI/CD 重建（仅普通版）
+
+- 远程 main 原 `.github/workflows/build.yml` 已先单独删除并推送，保留旧运行历史与已有 Release。
+- 新流程：PR main 验证；main push（含合并）按 verify → package → publish 门禁顺序生成普通版 R8 Preview 和独立预发布；按用户新要求不下载／内置 OCR 模型。仅 publish 使用 contents write，PR 无签名 Secret。
+- 本地 actionlint 1.7.12（官方发布 ZIP SHA-256 校验后使用）：新 workflow 通过；交付脚本 7 项 stdlib 单元测试通过，含真实普通产物／哈希保留、误用内置版拒绝、越界路径、空产物、篡改、运行身份及错误包名／构建类型拒绝。
+- 本地 Gradle --offline --no-daemon testDebugUnitTest lintDebug assembleDebug assemblePreview（ciVersionCode=100001、ciVersionSuffix=-ci.1.1）：通过，耗时 8m 3s；55 项 JVM 测试，无失败／错误／跳过；Lint 0 错误、63 警告。普通版 R8 Preview 从真实 AGP metadata 暂存成功、apksigner 验证通过，ZIP 检查没有 .traineddata 模型。此本机包仍使用本机调试签名，不冒充 CI 签名产物。
+- 本机 adb devices 无在线设备，未启动／安装／清理本机设备；API 36 设备验证交由专用 CI AVD。云端设备测试与真实 Release 尚待实际运行结果，不视为已通过。
+- 一次性 CI 专用签名密钥的自动创建／上传操作被执行安全策略拦截；未上传本机密钥，未将密钥写入仓库。管理员需按 `docs/CI_CD.md` 手动设置 Secret；缺失时 package 明确失败，不发布不可持续更新的随机签名包。

@@ -5,6 +5,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+// CI overrides are opt-in; local builds keep their existing version and signing.
+val ciVersionCode = providers.gradleProperty("ciVersionCode").orNull?.let {
+    requireNotNull(it.toIntOrNull()?.takeIf { code -> code in 1..2_100_000_000 }) { "Invalid ciVersionCode" }
+}
+val ciVersionSuffix = providers.gradleProperty("ciVersionSuffix").orElse("").get().also {
+    require(it.isEmpty() || it.matches(Regex("-ci\\.[0-9]+\\.[0-9]+"))) { "Invalid ciVersionSuffix" }
+}
+val ciPreviewKeystore = providers.environmentVariable("READX_CI_PREVIEW_KEYSTORE").orNull
 val bundledOcr = providers.gradleProperty("bundledOcr").map { it.toBooleanStrict() }.orElse(false).get()
 
 android {
@@ -14,7 +22,7 @@ android {
         applicationId = "io.readx.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 16
+        versionCode = ciVersionCode ?: 16
         versionName = if (bundledOcr) "0.7.4-ocr" else "0.7.4"
         buildConfigField("boolean", "BUNDLED_OCR", bundledOcr.toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -24,6 +32,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    signingConfigs {
+        if (ciPreviewKeystore != null) {
+            create("ciPreview") {
+                storeFile = file(ciPreviewKeystore)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -32,9 +50,9 @@ android {
         }
         create("preview") {
             initWith(getByName("release"))
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("ciPreview") ?: signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
-            versionNameSuffix = "-preview"
+            versionNameSuffix = "-preview$ciVersionSuffix"
         }
     }
     if (bundledOcr) sourceSets.getByName("main").assets.directories.add("src/ocrBundled/assets")

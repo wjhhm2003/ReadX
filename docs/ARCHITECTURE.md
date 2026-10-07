@@ -258,3 +258,11 @@ PDF Activity 的原生根布局独占 systemBars/displayCutout/IME 安全区；�
 - TXT canonical 文件仍为原文，只有 display 文件转换；模式/字典版本隔离派生索引，与既有按 UUID 清理路径兼容。流式 token 块保留最长词组所需尾部，避免 8KiB 索引块边界把“头发”等词拆成不同结果；不整章加载。原生选段复制在 IO 读取显示文字，批注仍从 canonical 建锚点。
 - 搜索结果依然来自原数据库原文：NativeTextSource.find 改为 canonical 搜索并映射回 display，Web 受控脚本也用原文索引，维持已有搜索/目录跳转，不承诺新增繁简等价查询。界面提示全文搜索仍按原文，批注导出也保留原引用。
 - 本轮用户要求只编译，不运行 JVM/设备/UI/性能测试；代码接入与编译不代表多栏/ruby/复杂样式/全部罕见字已经验收。
+
+
+## CI Preview 交付隔离（2026-10-07）
+
+- `.github/workflows/ci-release.yml` 将只读验证、带独立签名 Secret 的 R8 打包和仅负责发布的可写 job 分开。PR 不进入签名或发布，PR 合并后的 main push 统一触发交付，避免双重发布。
+- 用户要求 CI 仅交付普通版：显式 bundledOcr=false，不下载／内置模型。基于真实 AGP metadata 校验并暂存普通 R8 APK，单独保存 mapping、哈希与证书指纹；在新的专用 API 36 AVD 安装启动实际压缩包。
+- Preview 支持显式 CI versionCode／suffix 与工程外 keystore；本机默认构建、正式 release 未签名边界不变。CI 与本机签名不能混用。
+- 每次成功 run 发布独立 prerelease，先完整上传草稿再公开，不从易变的 main 重新编译、不覆盖历史发布或正式 Latest。详细流程、密钥初始化、版本计数边界见 [CI/CD](CI_CD.md)。

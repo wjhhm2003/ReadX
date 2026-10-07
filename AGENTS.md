@@ -206,6 +206,9 @@ Set-Location E:\ReadX
 
 ## 8. 产物与交付
 
+- CI/CD 入口为 `.github/workflows/ci-release.yml`：PR → main 验证，main 每次 push（含合并）通过后发布独立 prerelease；不要加 PR closed 重复发布或按路径跳过 main push。用户要求 CI 只交付普通版，显式 bundledOcr=false，不下载／内置 OCR 模型，不发布内置版 APK。
+- CI Preview 使用专用 `READX_CI_PREVIEW_KEYSTORE_BASE64` Actions Secret，不上传本机或正式密钥、不将私钥加入缓存／附件。CI `versionCode=100000+run_number`；保持工作流计数兼容，详细初始化与签名边界见 `docs/CI_CD.md`。
+
 - Debug：`E:\ReadX\app\build\outputs\apk\debug\app-debug.apk`。
 - 个人 Preview：`E:\ReadX\app\build\outputs\apk\preview\app-preview.apk`，启用 R8/资源压缩，使用本机调试密钥。
 - 正式 Release 不内置签名凭据。Preview 不是正式发行签名。

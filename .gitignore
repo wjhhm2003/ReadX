@@ -29,3 +29,7 @@ app/src/ocrBundled/assets/ocr/model-*.tmp
 
 # Private TXT acceptance inputs (root only; generated test assets remain allowed).
 /*.txt
+
+# Python CI tooling caches are local build by-products.
+__pycache__/
+*.py[cod]
