@@ -81,8 +81,10 @@ internal fun CroppedPdfScreen(book:Book,repository:LibraryRepository,document:Pd
         catch(e:CancellationException) {throw e} catch(e:Exception) {failure=e.message ?: "PDF 无法打开"}
         finally {opened?.let {withContext(NonCancellable) {it.close()}}}
     }
-    DisposableEffect(source) {val s=source;onDispose {if(s!=null)repository.closePdfResource {s.close()}}}
+    // Capture the composition value, not a later state read inside the effect body.
+    // A fast background open can update source between composition and effect application.
     val s=source
+    DisposableEffect(s) {onDispose {if(s!=null)repository.closePdfResource {s.close()}}}
     if(s==null) {Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {if(failure!=null)Text(failure!!) else CircularProgressIndicator()};return}
     val initial=(requestedPage ?: book.chapterIndex).coerceIn(0,s.count-1)
     val scope=rememberCoroutineScope()
@@ -165,7 +167,7 @@ private fun CroppedPdfPage(source:CroppedPdfSource,page:Int,config:PdfCropConfig
     var image by remember(source,page) {mutableStateOf<RenderedPdfPage?>(null)}
     var detected by remember(source,page) {mutableStateOf(CropRect.FULL)}
     var error by remember {mutableStateOf<String?>(null)}
-    LaunchedEffect(source,page) {try {image=source.render(page)}catch(e:CancellationException) {throw e}catch(e:Exception) {error=e.message}}
+    LaunchedEffect(source,page) {try {image=source.render(page)}catch(e:CancellationException) {throw e}catch(e:Exception) {error=e.message;if(io.readx.app.BuildConfig.DEBUG) android.util.Log.e("ReadXPdf", "Page render failed: page=$page",e)}}
     LaunchedEffect(source,page,config.automatic,config.enabled) {
         if(!config.enabled || !config.automatic)return@LaunchedEffect
         try {val preview=source.render(page,true);detected=withContext(Dispatchers.Default) {val b=preview.bitmap;val pixels=IntArray(b.width*b.height);b.getPixels(pixels,0,b.width,0,0,b.width,b.height);ensureActive();AutoPdfCrop.detect(pixels,b.width,b.height)}}

@@ -357,3 +357,12 @@ Debug / Preview 同 applicationId，安装会替换现有应用；普通版无�
 - 找到转换设置测试缺 Compose 根节点的直接原因：PDF 转换开关主动请求 POST_NOTIFICATIONS，API 36 系统通知权限对话框遮住应用。测试通过真实系统权限按钮拒绝（恢复 accessibility flags），继续验证无通知权限也能转换；不用新增依赖、临时授予／撤销权限或清空数据处理。
 - 恢复后的本地 testDebugUnitTest／lintDebug／assembleDebug／assembleDebugAndroidTest --offline --no-daemon 最终通过（1m 1s，前次因尝试使用未引入的 GrantPermissionRule 编译失败，已改用已有 UiAutomation 并重新编译）；JVM 测试报告 55 项通过，Lint 无错误。交付脚本 11 项通过、actionlint 与 git diff --check 通过。
 - 本轮提交高级 PDF 测量门禁及剩余 6 项旧测试定位修正，版本 0.7.5 / 17；云端全套设备复验与 Release 结果待实际运行，仍保留全门禁与普通版无模型策略。
+
+
+### 第三轮云端复验（9e264df / run 37578836743）
+
+- API 36 全套 62 项：48 通过、4 失败、10 跳过；JVM／Lint／脚本通过。通知系统弹窗处理、原生 TXT 章节路径与 PDF 安全区／重建断言通过。发布继续被失败门禁跳过，未产生新 Release。
+- 剩余 UI 测试需滚动设置列表到目标、等待目录弹层退出及真实原生正文 ready 后再注入点击；未增加任意延时。
+- 基础 PDF 仍显示加载状态，退出日志伴随 NativePdfSource 重复 close 的 Document already closed。资源 effect 调整为捕获组合时的稳定实例（与 key 一致），不在 effect 应用时重新读取已变化的 mutableState；NativePdfSource 在同一 Mutex 内幂等关闭，NonCancellable 保证 descriptor 释放，关闭后 render／select 提前拒绝。新增两项用自生成 PDF 的资源回归用例（重复／并发 close 和替换 source 独立性），等待设备实测。
+- 高级 PDF 0×0 仍偶发，宿主测量门禁不足。核实 beta01 PdfViewerFragment 上游：onLoadDocumentSuccess 在内部 PdfView 赋文档、从 GONE 切 VISIBLE 之前调用。改为在实际 PdfView 下一次正尺寸布局后，才向 Activity 发布 document；应用自有 loading container 保持可测量，被自有正文层覆盖，不改 AndroidX 的尺寸／裁边布局。回调检查 View 与 document 身份，避免旧回调跨重建写回。
+- 修改后本地 testDebugUnitTest／lintDebug／assembleDebug／assembleDebugAndroidTest 一次通过（1m 46s）；之前新 fixture 曾错误使用 Android PdfDocument.use 导致编译／Lint 分析失败，已改 try/finally 并重跑成功。进一步云端设备／R8／发布复验仍未完成。

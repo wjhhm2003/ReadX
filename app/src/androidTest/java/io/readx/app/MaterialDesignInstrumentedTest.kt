@@ -106,6 +106,8 @@ class MaterialDesignInstrumentedTest {
                 compose.onNodeWithTag("library-list").performScrollToIndex(0)
                 capture("md3-annotations")
                 tab("设置")
+                compose.onNodeWithTag("library-list").performScrollToIndex(0)
+                compose.onNodeWithTag("library-list").performScrollToNode(hasText("应用主题"))
                 compose.onNodeWithText("应用主题").assertIsDisplayed()
                 compose.onNodeWithText("紫色").performClick()
                 compose.onNodeWithTag("dynamic-colors-switch").performClick()

@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.doOnLayout
+import androidx.core.view.doOnNextLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.FragmentContainerView
@@ -234,7 +235,9 @@ class PdfActivity : AppCompatActivity() {
                 if(container!=null) {
                     if(horizontal && container.visibility==View.VISIBLE) requestedPage=page
                     if(!horizontal && container.visibility==View.INVISIBLE) viewer?.go(page,originalFraction)
-                    container.visibility=if(horizontal) View.INVISIBLE else View.VISIBLE
+                    // Keep the loading Fragment measurable until its PdfView has committed a
+                    // positive viewport; the app-side body covers it during custom loading.
+                    container.visibility=if(horizontal && document!=null) View.INVISIBLE else View.VISIBLE
                 }
                 body.visibility=if(horizontal) View.VISIBLE else View.GONE
             }
@@ -430,15 +433,27 @@ class ReadXPdfFragment : PdfViewerFragment() {
     private var pendingTarget: Pair<Int, Float>? = null
 
     override fun onLoadDocumentSuccess(document: PdfDocument) {
-        (activity as? PdfActivity)?.loaded(document)
-        val pending = pendingTarget
-        pendingTarget = null
-        if (pending != null) {
-            go(pending.first, pending.second, smooth = false)
-        } else if (!restoringSavedViewport) {
-            val initial = requireArguments().getInt("initialPage").coerceIn(0, (document.pageCount - 1).coerceAtLeast(0))
-            currentView?.post {
-                try { currentView?.scrollToPage(initial) } catch(_: Throwable) {}
+        // beta01 invokes this callback before assigning PdfView.pdfDocument and making
+        // that GONE loading view visible. Publishing it immediately lets Compose hide
+        // the Fragment for a custom/horizontal mode before the child's first layout.
+        val pdfView=currentView ?: return
+        pdfView.doOnNextLayout { measured ->
+            if(currentView!==pdfView || pdfView.pdfDocument!==document) return@doOnNextLayout
+            if(measured.width<=0 || measured.height<=0) {
+                (activity as? PdfActivity)?.failed(IllegalStateException("PDF 阅读区域尚未完成有效测量"))
+                return@doOnNextLayout
+            }
+            (activity as? PdfActivity)?.loaded(document)
+            val pending=pendingTarget
+            pendingTarget=null
+            if(pending!=null) go(pending.first,pending.second,smooth=false)
+            else if(!restoringSavedViewport) {
+                val initial=requireArguments().getInt("initialPage").coerceIn(0,(document.pageCount-1).coerceAtLeast(0))
+                pdfView.post {
+                    if(currentView===pdfView && pdfView.pdfDocument===document) {
+                        try {pdfView.scrollToPage(initial)} catch(_:Exception) {}
+                    }
+                }
             }
         }
     }

@@ -26,9 +26,14 @@ class ReaderUiTest {
                 compose.onNodeWithText("导入示例").performClick()
             }
             compose.waitUntil(15000) { compose.onAllNodesWithTag("reader-content").fetchSemanticsNodes().isNotEmpty() }
+            waitReaderReady()
             compose.showTextReaderControls()
             compose.onNodeWithContentDescription("目录").performClick()
             compose.onNodeWithText("第三章 下一步").performClick()
+            // The directory dismisses asynchronously. Do not center-tap underneath its sheet.
+            compose.waitUntil(5000) { compose.onAllNodesWithContentDescription("搜本书").fetchSemanticsNodes().isEmpty() }
+            compose.waitForIdle()
+            waitReaderReady(2)
             compose.openFullReaderSettings()
             compose.onNodeWithText("暖色").performClick()
             compose.onNodeWithText("阅读设置").assertIsDisplayed()
@@ -39,6 +44,7 @@ class ReaderUiTest {
             compose.onNode(hasSetTextAction()).performTextInput("安静")
             compose.waitUntil(15000) { compose.onAllNodesWithText("欢迎使用 ReadX · 第二章 给阅读留一点空间").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText("欢迎使用 ReadX · 第二章 给阅读留一点空间").performClick()
+            waitReaderReady(1)
             compose.showTextReaderControls()
             compose.onNodeWithContentDescription("目录").performClick()
             compose.onAllNodesWithText("第二章 给阅读留一点空间").onLast().assertIsDisplayed()
@@ -53,5 +59,14 @@ class ReaderUiTest {
                     .forEach { app.repository.delete(it) }
             }
         }
+    }
+    private fun waitReaderReady(chapter:Int?=null) {
+        compose.waitUntil(15000) {compose.runOnIdle {ready(compose.activity.window.decorView,chapter)}}
+    }
+    private fun ready(view:android.view.View,chapter:Int?):Boolean {
+        if(view is io.readx.app.reader.NativeReaderView) return view.ready && (chapter==null || view.chapterOrdinal==chapter)
+        if(view is io.readx.app.reader.LocalWebReader && view.isEnabled) return !view.restoring && view.alpha>=.99f && (chapter==null || view.url.orEmpty().contains("chapter-$chapter"))
+        if(view is android.view.ViewGroup) for(i in 0 until view.childCount) if(ready(view.getChildAt(i),chapter))return true
+        return false
     }
 }

@@ -78,8 +78,10 @@ internal class NativePdfSource(file: File) {
     private val descriptor=ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY)
     private val renderer=try { PdfRenderer(descriptor) } catch(e: Exception) {descriptor.close();throw e}
     private val lock=Mutex()
+    private var closed=false
     val count=renderer.pageCount
     suspend fun render(index: Int, target: Int = 1280): RenderedPdfPage=withContext(Dispatchers.IO) { lock.withLock {
+        check(!closed) {"PDF 文档已关闭"}
         renderer.openPage(index).use { p->
             val size=renderSize(p.width,p.height,target)
             val bitmap=Bitmap.createBitmap(size.width,size.height,Bitmap.Config.ARGB_8888)
@@ -89,6 +91,7 @@ internal class NativePdfSource(file: File) {
     } }
     @SuppressLint("NewApi")
     suspend fun select(index: Int, start: PointF,end: PointF): PdfSelection?=withContext(Dispatchers.IO) { lock.withLock {
+        check(!closed) {"PDF 文档已关闭"}
         if(Build.VERSION.SDK_INT<35) return@withLock null
         renderer.openPage(index).use { p->
             val selection=p.selectContent(android.graphics.pdf.models.selection.SelectionBoundary(android.graphics.Point(start.x.toInt(),start.y.toInt())),android.graphics.pdf.models.selection.SelectionBoundary(android.graphics.Point(end.x.toInt(),end.y.toInt()))) ?: return@use null
@@ -97,7 +100,9 @@ internal class NativePdfSource(file: File) {
             PdfSelection(texts.joinToString("\n") {it.text}.take(16384),boxes).takeIf { it.boxes.isNotEmpty() }
         }
     } }
-    suspend fun close()=withContext(Dispatchers.IO) {lock.withLock {renderer.close();descriptor.close()}}
+    suspend fun close()=withContext(NonCancellable+Dispatchers.IO) {lock.withLock {
+        if(!closed) {closed=true;try {renderer.close()} finally {descriptor.close()}}
+    }}
 }
 internal data class RenderedPdfPage(val bitmap: Bitmap,val width: Int,val height: Int)
 internal fun renderSize(width: Int,height: Int,target: Int = 1280): Size {
@@ -122,7 +127,8 @@ fun HorizontalPdfScreen(book: Book, repository: LibraryRepository, document: Pdf
             finally {opened?.let {withContext(NonCancellable) {it.close()}}}
         }
     }
-    DisposableEffect(native) { val source=native; onDispose { if(source!=null) repository.closePdfResource {source.close()} } }
+    val ownedNative=native
+    DisposableEffect(ownedNative) { onDispose { if(ownedNative!=null) repository.closePdfResource {ownedNative.close()} } }
     val count=document?.pageCount ?: native?.count ?: 0
     if(count<=0) { Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {if(error!=null) Text(error!!,Modifier.padding(24.dp)) else CircularProgressIndicator()};return }
     val pager=rememberPagerState(initialPage=(requestedPage ?: book.chapterIndex).coerceIn(0,count-1),pageCount={count})

@@ -271,3 +271,7 @@ PDF Activity 的原生根布局独占 systemBars/displayCutout/IME 安全区；�
 ## 高级 PDF 初始视口测量（2026-10-07，0.7.5）
 
 AndroidX PDF beta01 的渲染请求来自其 View 视口。CI 全套测试观察到 0×0 bitmap 请求；未测量／视图重建生命周期是本轮排查的可能原因，尚待复验；应用侧渲染尺寸已有正数限制，因此不能只调应用位图 target 或增加测试等待。PdfActivity 在宿主和新 Fragment 根 View 的真实布局完成后再设置 documentUri；挂起等待有界、传播取消，晚到布局回调不恢复已取消协程。保留现有高级路径、PdfRenderer 回退、覆盖式控件与安全区职责，不添加额外正文边距。具体效果以新的设备报告为准。
+
+
+- 进一步查明 beta01 的成功回调早于内部 PdfView 的文档赋值／从加载态 GONE 到 VISIBLE 的切换：仅量宿主无法保证子 View 有有效视口。现由公开成功回调注册下一次布局，在实际 PdfView 具有正宽高且当前文档／View 身份匹配后才向应用发布文档与执行恢复请求。自有容器在初次加载时保持可测量，应用自有正文层覆盖；不改 AndroidX 裁边或内部 layout params。
+- PdfRenderer 资源 effect 的关闭对象取组合阶段稳定值，和 effect key 对齐；渲染／选区／关闭共用现有 Mutex，关闭幂等且不可取消，避免重复回收抛错与文件描述符泄漏。新增设备资源用例只创建并清理自己的 PDF，不碰书库用户数据。
