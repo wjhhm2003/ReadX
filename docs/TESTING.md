@@ -373,3 +373,22 @@ Debug / Preview 同 applicationId，安装会替换现有应用；普通版无�
 - 64 项设备测试（含新增 2 项资源回归）：53 通过、1 失败、10 跳过；全部 PDF 用例、本轮资源回归、示例目录／搜索与转换权限闭环通过。该单轮通过不代表 PDF 全设备／长期压力已验收。
 - 唯一失败是 MaterialDesignInstrumentedTest 仍找旧标题「应用主题」，源码实际分为「深浅外观／强调色与壁纸」。更新到真实标题与实际滚动目标；同一用例的阅读模式切换也通过可滚动父容器定位。
 - JVM／Lint／交付脚本通过；失败仍阻止 package／publish，无新 Release。仅测试／记录修改不再递增功能版本，待完整套件与发布首轮真正通过。
+
+
+## 2026-10-07：自动测试 → 普通版 Preview → Release 首次闭环成功
+
+- 已核实 Actions run **37583219394**，源码 **2ed528dcff5d8732f975dc0e75fd9380aae22696**，push 触发；verify、package、publish 三 job 全部 success。API 36 / google_apis / x86_64 / Pixel 6 为专用临时 AVD，没有使用用户设备。
+- 从下载的真实 XML 核对：**55 项 JVM 测试全部通过**；**64 项设备测试，54 通过、0 失败、0 错误、10 跳过**。10 项为普通包未内置模型的部署／OCR、未供应的私有样书、主动联网下载和私有压力测试，未新增跳过来规避失败。Lint **0 错误、64 警告**；11 项交付／Bash 工具测试通过。
+- 专用 CI Secret 正确恢复，R8／资源压缩普通 Preview 真实构建成功；压缩 APK 在第二个专用 API 36 AVD 安装并启动，Status: ok，进程及 crash buffer 门禁通过；apksigner 验签且证书 SHA-256 与专用 keystore 一致。
+- **2026-10-07 15:02（Asia/Shanghai）**公开预发布 **ci-v0.7.5-7.1-2ed528d**；draft=false、prerelease=true，target_commitish 精确指向上述源码。未设正式 Latest，不覆盖旧 v0.5.0 发布。
+- Release 资产为 app-preview.apk、SHA256SUMS.txt、build-info.json、release-notes.md；没有内置 OCR APK。实际版本 **0.7.5-preview-ci.7.1 / versionCode 100007 / io.readx.app / bundledOcr=false**。
+
+| 实际 Release 资产 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| app-preview.apk | 41687361 | 208f11b40c425449d02891f7fd5b09bb7d4cce798e5da73755c5c1b6cf65693d |
+
+签名证书 SHA-256：054236d6809169618a07b7249898f6ec908347ac2a5e9ef284a711d774eba932（只记录公开证书指纹，不是私钥）。API 返回的资产 digest 与 release manifest、SHA256SUMS 一致；已下载的 build-info／release-notes 哈希也本地校验一致。CI 验证了实际 APK，未将本机 debug 签名产物冒充 CI 包。
+
+报告／测试截图与公开 manifest 留在忽略的 .research/ci-37583219394（不提交诊断文件）。本记录是特定运行／API 36 的验收，不代表所有设备、复杂 PDF、扫描 OCR 或长期内存压力全部完成。CI 包与本机历史 Preview 签名不同，不能直接覆盖；不通过卸载／清空书库解决冲突。
+
+本次仅补验收文档的后续 main push 按约定也会启动下一轮自动测试与交付；不使用 skip-ci 或路径过滤绕过它，也不为记录每轮文档构建而循环追加提交。

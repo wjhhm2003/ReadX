@@ -90,3 +90,7 @@ actionlint .github/workflows/ci-release.yml
 ```
 
 配置／静态验证不代表云端全流程已成功；实际云端结果与未完成项见 `docs/TESTING.md` 和对应 Actions run。
+
+## 首次已验证交付
+
+2026-10-07 的 push run 37583219394（源码 2ed528d）已完成 verify／package／publish 全闭环，公开普通版预发布 ci-v0.7.5-7.1-2ed528d。签名 Secret、R8 APK 安装启动、SHA-256 与 Release 上传已实际通过；设备测试 64 项中 54 通过／10 可选跳过。后续每次 main push 独立执行，不把这次结果视为未来提交已经通过。详细产物与验证边界见 TESTING.md。
