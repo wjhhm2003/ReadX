@@ -12,6 +12,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import io.readx.app.conversion.*
 import io.readx.app.data.Book
 import io.readx.app.ui.*
@@ -158,6 +159,28 @@ class PdfConversionInstrumentedTest {
                 compose.onNodeWithTag("pdf-to-epub-switch").performClick()
                 assertTrue(ReaderPreferences(app).settings.value.pdfToEpubEnabled)
                 assertTrue(runBlocking {app.conversions.dao.forSource(book.id)}.isEmpty())
+                // Enabling conversion may display a native notification permission dialog.
+                // Decline it through the actual system UI; conversion must also work without
+                // notifications. Do not grant/revoke permission mid-suite (revocation kills it).
+                val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+                val previousFlags=automation.serviceInfo.flags
+                automation.serviceInfo=automation.serviceInfo.apply {
+                    flags=flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+                }
+                try {
+                    compose.waitUntil(5000) {
+                        val root=automation.rootInActiveWindow
+                        if(root?.packageName?.toString()?.contains("permissioncontroller")==true) {
+                            listOf("com.android.permissioncontroller", "com.google.android.permissioncontroller").forEach {pkg->
+                                root.findAccessibilityNodeInfosByViewId("$pkg:id/permission_deny_button").firstOrNull()
+                                    ?.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+                            }
+                        }
+                        compose.onAllNodes(hasText("书库") and hasClickAction()).fetchSemanticsNodes(atLeastOneRootRequired=false).isNotEmpty()
+                    }
+                } finally {
+                    automation.serviceInfo=automation.serviceInfo.apply {flags=previousFlags}
+                }
                 compose.onNode(hasText("书库") and hasClickAction()).performClick()
                 compose.waitUntil(10000) {compose.onAllNodesWithText(book.title).fetchSemanticsNodes(atLeastOneRootRequired=false).isNotEmpty()}
                 compose.onAllNodesWithText(book.title).onLast().performClick()

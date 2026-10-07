@@ -51,16 +51,18 @@ class PdfInstrumentedTest {
             var hiddenHeight = 0
             scenario.onActivity { activity ->
                 val content = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
-                val frame = content.getChildAt(0) as android.widget.FrameLayout
+                val root = content.getChildAt(0) as android.widget.LinearLayout
+                val frame = root.getChildAt(0) as android.widget.FrameLayout
                 val viewer = (0 until frame.childCount).map(frame::getChildAt)
                     .filterIsInstance<androidx.fragment.app.FragmentContainerView>().single()
                 hiddenHeight = viewer.height
-                org.junit.Assert.assertEquals("Only system safe area may precede the PDF", frame.paddingTop, viewer.top)
-                org.junit.Assert.assertEquals(frame.height - frame.paddingTop - frame.paddingBottom, viewer.height)
+                org.junit.Assert.assertEquals("Only system safe area may precede the PDF", 0, viewer.top)
+                org.junit.Assert.assertEquals(root.height - root.paddingTop - root.paddingBottom, viewer.height)
             }
             compose.showPdfControls(scenario)
             scenario.onActivity { activity ->
-                val frame = (activity.findViewById<android.view.ViewGroup>(android.R.id.content)).getChildAt(0) as android.widget.FrameLayout
+                val root = (activity.findViewById<android.view.ViewGroup>(android.R.id.content)).getChildAt(0) as android.widget.LinearLayout
+                val frame = root.getChildAt(0) as android.widget.FrameLayout
                 val viewer = (0 until frame.childCount).map(frame::getChildAt)
                     .filterIsInstance<androidx.fragment.app.FragmentContainerView>().single()
                 org.junit.Assert.assertEquals("Showing controls must not shrink the PDF", hiddenHeight, viewer.height)
@@ -74,10 +76,10 @@ class PdfInstrumentedTest {
         val intent = Intent(app, PdfActivity::class.java).putExtra("bookId", book.id).putExtra("forceBasicForTest", true)
         ActivityScenario.launch<PdfActivity>(intent).use {
             waitForPage(1)
-            compose.waitUntil(15000) {compose.onAllNodesWithTag("pdf-page-0").fetchSemanticsNodes().isNotEmpty()}
-            compose.onNodeWithTag("pdf-page-0").performTouchInput { swipeLeft() }
+            compose.waitUntil(15000) {compose.onAllNodesWithTag("pdf-cropped-page-0").fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("pdf-cropped-page-0").performTouchInput { swipeLeft() }
             waitForPage(2)
-            compose.onNodeWithTag("pdf-page-1").assertIsDisplayed()
+            compose.onNodeWithTag("pdf-cropped-page-1").assertIsDisplayed()
         }
     }
     private fun waitForPage(number: Int) {

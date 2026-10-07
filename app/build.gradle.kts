@@ -22,8 +22,8 @@ android {
         applicationId = "io.readx.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = ciVersionCode ?: 16
-        versionName = if (bundledOcr) "0.7.4-ocr" else "0.7.4"
+        versionCode = ciVersionCode ?: 17
+        versionName = if (bundledOcr) "0.7.5-ocr" else "0.7.5"
         buildConfigField("boolean", "BUNDLED_OCR", bundledOcr.toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

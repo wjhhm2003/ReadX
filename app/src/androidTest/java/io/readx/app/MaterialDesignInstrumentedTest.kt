@@ -97,7 +97,7 @@ class MaterialDesignInstrumentedTest {
                 compose.onAllNodesWithText(title).assertCountEquals(0)
                 compose.onNodeWithText("全部").performClick()
                 compose.onAllNodesWithText(title).onFirst().assertIsDisplayed()
-                compose.onNodeWithText("TXT").performClick()
+                compose.onNode(hasText("TXT") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
                 compose.onNodeWithText(title).assertIsDisplayed()
                 capture("md3-library")
                 tab("批注")

@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
+import androidx.core.view.doOnLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.FragmentContainerView
@@ -254,10 +255,17 @@ class PdfActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val loaded=repository.dao.book(id) ?: run {finish();return@launch};book=loaded;page=requestedPage ?: loaded.chapterIndex;originalFraction=loaded.scrollFraction;cropConfig=PdfCropConfig.parse(loaded.pdfCropConfig)
             if(container!=null) {
+                // The advanced PdfView derives bitmap size from its viewport. Do not load its
+                // document before the actual safe-area container is measured: a zero-width
+                // first frame can otherwise reach the sandbox renderer as a 0 x 0 request.
+                container.awaitPdfViewport()
                 val existing=supportFragmentManager.findFragmentByTag("pdf") as? ReadXPdfFragment
                 viewer=existing ?: ReadXPdfFragment().apply {arguments=Bundle().apply {putString("bookId",id);putInt("initialPage",page)}}
                 if(existing==null) supportFragmentManager.beginTransaction().replace(container.id,viewer!!,"pdf").commitNow()
-                if(existing==null) viewer!!.documentUri=FileProvider.getUriForFile(this@PdfActivity,packageName+".files",repository.source(loaded))
+                if(existing==null) {
+                    viewer!!.requireView().awaitPdfViewport()
+                    viewer!!.documentUri=FileProvider.getUriForFile(this@PdfActivity,packageName+".files",repository.source(loaded))
+                }
                 else {document=viewer!!.currentDocument();pageCount=document?.pageCount ?: 0}
                 viewer?.annotationsChanged(annotations)
             }
@@ -496,4 +504,18 @@ private fun PageJumpDialog(count: Int, go: (Int) -> Unit, dismiss: () -> Unit) {
     val number = input.toIntOrNull()
     AlertDialog(onDismissRequest = dismiss, title = { Text("跳转页码") }, text = { OutlinedTextField(input, { input = it.filter(Char::isDigit).take(8) }, label = { Text("1–$count") }, singleLine = true) },
         confirmButton = { TextButton(onClick = { go(number!! - 1) }, enabled = number != null && number in 1..count) { Text("跳转") } }, dismissButton = { TextButton(onClick = dismiss) { Text("取消") } })
+}
+
+/** Suspend until the actual host/fragment viewport has a positive measured size. */
+private suspend fun View.awaitPdfViewport() {
+    withTimeout(5000) {
+        suspendCancellableCoroutine<Unit> { continuation ->
+            doOnLayout { measured ->
+                if (continuation.isActive) {
+                    if (measured.width > 0 && measured.height > 0) continuation.resumeWith(Result.success(Unit))
+                    else continuation.resumeWith(Result.failure(IllegalStateException("PDF 阅读区域尚未完成有效测量")))
+                }
+            }
+        }
+    }
 }

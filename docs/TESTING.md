@@ -341,3 +341,19 @@ Debug / Preview 同 applicationId，安装会替换现有应用；普通版无�
 - 修正后的云端全套设备测试和后续签名／Release：待实际复验。
 
 - 检查固定提交的 emulator-runner src/main.ts 与 script-parser.ts，确认 script 输入按每行拆分，逐条 sh -c 执行；原 YAML 多行 Bash 函数／pipefail 与启动脚本不能直接运行。已改为单行 bash scripts/ci-device-tests.sh 和 bash scripts/ci-preview-smoke.sh。新增 4 项模拟 adb／Gradle 的 Bash 合约回归测试，连同原交付 7 项共 11 项本地通过，确认 Gradle 非零状态不会被收集截图掩盖，启动异常／crash 会阻止交付。
+
+
+### 第二轮云端复验（548a54e / run 37568343088）
+
+- 真实 62 项设备测试：44 通过、8 失败、10 跳过；JVM 55 项通过，脚本 11 项与 Lint 通过。失败未被忽略，package／publish 仍跳过，无新 Release。
+- 原失败中的 EPUB 实际分页缓存、文字标记、分页／滚动切换、恢复位置、长按选区、PDF 真文字批注与链接返回等已在这次执行通过；尚余样例树歧义、漏设 WebView 的 TXT 样书、PDF 基础路径现已使用 cropped tag、原生安全区容器层级断言及转换设置页瞬态根节点检查。
+- 两项此前通过的 PDF 交互用例这次暴露高级 AndroidX BitmapFetcher 的 0×0 渲染请求。核实固定 beta01 上游源码：SandboxedPdfDocument／PdfDocumentRemoteImpl 使用传入 bitmap size，应用自己的 renderSize 已限制最小 1。采用小范围生命周期修正：在宿主容器、刚创建的 Fragment 根 View 完成有效测量后才设置 documentUri，避免未测量视口触发首次请求；不升级依赖、不绕过系统能力、不给 PDF 添加空白边距。
+- 此运行时修正递增本地版本 0.7.5 / versionCode 17；数据库与签名边界不变。新的编译与云端复验待结果，不能把异常已消失作为已验收结论。
+
+
+### 暂停后继续验证（2026-10-07）
+
+- 复核本地未提交修改、main 与 Actions run，无覆盖用户修改。暂停时的本地构建已中断，恢复后重新执行。
+- 找到转换设置测试缺 Compose 根节点的直接原因：PDF 转换开关主动请求 POST_NOTIFICATIONS，API 36 系统通知权限对话框遮住应用。测试通过真实系统权限按钮拒绝（恢复 accessibility flags），继续验证无通知权限也能转换；不用新增依赖、临时授予／撤销权限或清空数据处理。
+- 恢复后的本地 testDebugUnitTest／lintDebug／assembleDebug／assembleDebugAndroidTest --offline --no-daemon 最终通过（1m 1s，前次因尝试使用未引入的 GrantPermissionRule 编译失败，已改用已有 UiAutomation 并重新编译）；JVM 测试报告 55 项通过，Lint 无错误。交付脚本 11 项通过、actionlint 与 git diff --check 通过。
+- 本轮提交高级 PDF 测量门禁及剩余 6 项旧测试定位修正，版本 0.7.5 / 17；云端全套设备复验与 Release 结果待实际运行，仍保留全门禁与普通版无模型策略。

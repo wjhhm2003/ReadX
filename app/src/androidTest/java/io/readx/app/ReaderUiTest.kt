@@ -41,7 +41,7 @@ class ReaderUiTest {
             compose.onNodeWithText("欢迎使用 ReadX · 第二章 给阅读留一点空间").performClick()
             compose.showTextReaderControls()
             compose.onNodeWithContentDescription("目录").performClick()
-            compose.onNodeWithText("第二章 给阅读留一点空间").assertIsDisplayed()
+            compose.onAllNodesWithText("第二章 给阅读留一点空间").onLast().assertIsDisplayed()
             compose.onNodeWithText("完成").performClick()
             compose.onNodeWithContentDescription("返回书架").performClick()
             compose.onNodeWithText("ReadX").assertIsDisplayed()

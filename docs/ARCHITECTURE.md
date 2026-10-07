@@ -266,3 +266,8 @@ PDF Activity 的原生根布局独占 systemBars/displayCutout/IME 安全区；�
 - 用户要求 CI 仅交付普通版：显式 bundledOcr=false，不下载／内置模型。基于真实 AGP metadata 校验并暂存普通 R8 APK，单独保存 mapping、哈希与证书指纹；在新的专用 API 36 AVD 安装启动实际压缩包。
 - Preview 支持显式 CI versionCode／suffix 与工程外 keystore；本机默认构建、正式 release 未签名边界不变。CI 与本机签名不能混用。
 - 每次成功 run 发布独立 prerelease，先完整上传草稿再公开，不从易变的 main 重新编译、不覆盖历史发布或正式 Latest。详细流程、密钥初始化、版本计数边界见 [CI/CD](CI_CD.md)。
+
+
+## 高级 PDF 初始视口测量（2026-10-07，0.7.5）
+
+AndroidX PDF beta01 的渲染请求来自其 View 视口。CI 全套测试观察到 0×0 bitmap 请求；未测量／视图重建生命周期是本轮排查的可能原因，尚待复验；应用侧渲染尺寸已有正数限制，因此不能只调应用位图 target 或增加测试等待。PdfActivity 在宿主和新 Fragment 根 View 的真实布局完成后再设置 documentUri；挂起等待有界、传播取消，晚到布局回调不恢复已取消协程。保留现有高级路径、PdfRenderer 回退、覆盖式控件与安全区职责，不添加额外正文边距。具体效果以新的设备报告为准。

@@ -116,7 +116,7 @@ class AsyncPaginationInstrumentedTest {
         val file = File(app.cacheDir, "$title.txt")
         val body = (1..60).joinToString("\n\n") { "第${it}段是自生成的阅读器测试内容。中文长段落与 English text 混排，用于验证左右滑动、三分屏点击、滚动模式切换和原有阅读进度兼容。编号 $it。" }
         file.writeText("第一章 手势测试\n$body\n\n第二章 搜索测试\n$body\n独有检索词杏花春雨 $title")
-        val book = runBlocking { app.repository.import(Uri.fromFile(file)) }
+        val book = runBlocking { app.repository.import(Uri.fromFile(file)).also { if(it.format=="TXT") app.repository.dao.saveTextEngine(it.id,"WEBVIEW") } }
         try {
             ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)).use { scenario ->
                 lateinit var model: LibraryViewModel
